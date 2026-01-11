@@ -42,7 +42,8 @@ def find_serial_port_by_usb_id(usb_id: str) -> str:
         product_id_int = int(product_id, 16)
     except (ValueError, AttributeError) as e:
         raise SerialDeviceNotFoundError(
-            f"Invalid USB ID format '{usb_id}'. Expected format: 'vendor:product' (e.g., '303a:4001')"
+            f"Invalid USB ID format '{usb_id}'. \
+              Expected format: 'vendor:product' (e.g., '303a:4001')"
         ) from e
     
     ports = serial.tools.list_ports.comports()
@@ -54,8 +55,8 @@ def find_serial_port_by_usb_id(usb_id: str) -> str:
     
     # List available devices for debugging
     available = [
-        f"{p.device} (VID:PID={p.vid:04x}:{p.pid:04x})" 
-        for p in ports 
+        f"{p.device} (VID:PID={p.vid:04x}:{p.pid:04x})"
+        for p in ports
         if p.vid is not None and p.pid is not None
     ]
     logger.error(f"Device {usb_id} not found. Available devices: {available}")

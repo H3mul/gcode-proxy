@@ -7,7 +7,7 @@ external scripts or perform custom actions based on the data.
 """
 
 from abc import ABC, abstractmethod
-from typing import Callable, Awaitable
+from collections.abc import Callable, Awaitable
 
 
 class GCodeHandler(ABC):

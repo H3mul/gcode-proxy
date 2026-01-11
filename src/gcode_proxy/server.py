@@ -11,7 +11,6 @@ import logging
 
 from .device import GCodeDevice
 from .utils import SerialConnectionError
-from .handlers import GCodeHandler, ResponseHandler
 
 
 logger = logging.getLogger(__name__)
@@ -182,7 +181,7 @@ class GCodeServer:
                 
                 # Split into individual commands (handle both \n and \r\n)
                 commands = [
-                    cmd.strip() 
+                    cmd.strip()
                     for cmd in raw_commands.replace("\r\n", "\n").split("\n")
                     if cmd.strip()
                 ]

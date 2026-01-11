@@ -17,7 +17,7 @@ from .handlers import (
     DefaultGCodeHandler,
     DefaultResponseHandler,
 )
-from .utils import SerialDeviceNotFoundError, SerialConnectionError, find_serial_port_by_usb_id
+from .utils import SerialConnectionError, find_serial_port_by_usb_id
 
 
 logger = logging.getLogger(__name__)
@@ -250,7 +250,7 @@ class GCodeDevice:
                 # Check for common response terminators
                 # Most GCode devices respond with "ok" when ready for next command
                 lower_line = decoded_line.lower()
-                if (lower_line.startswith("ok") or 
+                if (lower_line.startswith("ok") or
                     lower_line.startswith("error") or
                     lower_line.startswith("!!")):  # Marlin fatal error
                     break

@@ -2,7 +2,7 @@
 
 import pytest
 
-from gcode_proxy.handlers import (
+from src.gcode_proxy.handlers import (
     GCodeHandler,
     ResponseHandler,
     DefaultGCodeHandler,

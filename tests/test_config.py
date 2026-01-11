@@ -4,14 +4,12 @@ import os
 import tempfile
 from pathlib import Path
 
-import pytest
 import yaml
 
-from gcode_proxy.config import (
+from src.gcode_proxy.config import (
     Config,
     DeviceConfig,
     ServerConfig,
-    DEFAULT_CONFIG_PATH,
     ENV_CONFIG_FILE,
     ENV_DEVICE_BAUD_RATE,
     ENV_DEVICE_USB_ID,
