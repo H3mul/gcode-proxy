@@ -22,6 +22,7 @@ ENV_SERVER_PORT = "SERVER_PORT"
 ENV_SERVER_ADDRESS = "SERVER_ADDRESS"
 ENV_DEVICE_USB_ID = "DEVICE_USB_ID"
 ENV_DEVICE_BAUD_RATE = "DEVICE_BAUD_RATE"
+ENV_DEVICE_SERIAL_DELAY = "DEVICE_SERIAL_DELAY"
 ENV_CONFIG_FILE = "GCODE_PROXY_CONFIG"
 
 
@@ -37,8 +38,9 @@ class ServerConfig:
 class DeviceConfig:
     """USB device configuration settings."""
     
-    usb_id: str = "303a:4001"
+    usb_id: str | None = None
     baud_rate: int = 115200
+    serial_delay: float = 0.1
 
 
 @dataclass
@@ -68,6 +70,9 @@ class Config:
             
         Returns:
             Loaded and merged configuration.
+            
+        Raises:
+            ValueError: If required usb_id is not set after loading all sources.
         """
         config = cls()
         
@@ -87,6 +92,9 @@ class Config:
         
         # Override with environment variables (highest precedence)
         config = cls._apply_env_vars(config)
+        
+        # Validate required configuration
+        config._validate()
         
         return config
     
@@ -129,6 +137,10 @@ class Config:
                 config.device.baud_rate = int(device_data["baud-rate"])
             elif "baud_rate" in device_data:
                 config.device.baud_rate = int(device_data["baud_rate"])
+            if "serial-delay" in device_data:
+                config.device.serial_delay = float(device_data["serial-delay"])
+            elif "serial_delay" in device_data:
+                config.device.serial_delay = float(device_data["serial_delay"])
         
         return config
     
@@ -155,6 +167,9 @@ class Config:
         if cli_args.get("baud_rate") is not None:
             config.device.baud_rate = int(cli_args["baud_rate"])
         
+        if cli_args.get("serial_delay") is not None:
+            config.device.serial_delay = float(cli_args["serial_delay"])
+        
         return config
     
     @classmethod
@@ -179,7 +194,24 @@ class Config:
         if ENV_DEVICE_BAUD_RATE in os.environ:
             config.device.baud_rate = int(os.environ[ENV_DEVICE_BAUD_RATE])
         
+        if ENV_DEVICE_SERIAL_DELAY in os.environ:
+            config.device.serial_delay = float(os.environ[ENV_DEVICE_SERIAL_DELAY])
+        
         return config
+    
+    def _validate(self) -> None:
+        """Validate required configuration values.
+        
+        Raises:
+            ValueError: If required configuration is missing.
+        """
+        if self.device.usb_id is None or not self.device.usb_id.strip():
+            raise ValueError(
+                "USB ID is required but not set. Please provide it via:\n"
+                "  - Environment variable: DEVICE_USB_ID\n"
+                "  - CLI argument: --usb-id\n"
+                "  - Config file: device.usb-id"
+            )
     
     def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary.
@@ -195,6 +227,7 @@ class Config:
             "device": {
                 "usb_id": self.device.usb_id,
                 "baud_rate": self.device.baud_rate,
+                "serial_delay": self.device.serial_delay,
             },
         }
     
@@ -219,6 +252,7 @@ class Config:
             "device": {
                 "usb-id": self.device.usb_id,
                 "baud-rate": self.device.baud_rate,
+                "serial-delay": self.device.serial_delay,
             },
         }
         

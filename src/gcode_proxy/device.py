@@ -1,16 +1,14 @@
 """
-Core GCode Proxy functionality.
+GCode Device - Serial communication with USB devices.
 
-This module provides the core logic for proxying GCode commands between
-TCP clients and USB serial devices using non-blocking async operations.
+This module provides the GCodeDevice class for managing serial connections
+and communication with USB-connected devices using non-blocking async operations.
 """
 
 import asyncio
 import logging
-from typing import Callable, Awaitable
 
 import serial
-import serial.tools.list_ports
 from serial_asyncio import open_serial_connection
 
 from .handlers import (
@@ -19,67 +17,15 @@ from .handlers import (
     DefaultGCodeHandler,
     DefaultResponseHandler,
 )
+from .utils import SerialDeviceNotFoundError, SerialConnectionError, find_serial_port_by_usb_id
 
 
 logger = logging.getLogger(__name__)
 
 
-class SerialDeviceNotFoundError(Exception):
-    """Raised when the specified USB device cannot be found."""
-    pass
-
-
-class SerialConnectionError(Exception):
-    """Raised when there's an error connecting to or communicating with the serial device."""
-    pass
-
-
-def find_serial_port_by_usb_id(usb_id: str) -> str:
+class GCodeDevice:
     """
-    Find the serial port path for a given USB device ID.
-    
-    Args:
-        usb_id: USB device ID in vendor:product format (e.g., "303a:4001").
-        
-    Returns:
-        The serial port path (e.g., "/dev/ttyUSB0" or "COM3").
-        
-    Raises:
-        SerialDeviceNotFoundError: If no matching device is found.
-    """
-    try:
-        vendor_id, product_id = usb_id.lower().split(":")
-        vendor_id_int = int(vendor_id, 16)
-        product_id_int = int(product_id, 16)
-    except (ValueError, AttributeError) as e:
-        raise SerialDeviceNotFoundError(
-            f"Invalid USB ID format '{usb_id}'. Expected format: 'vendor:product' (e.g., '303a:4001')"
-        ) from e
-    
-    ports = serial.tools.list_ports.comports()
-    
-    for port in ports:
-        if port.vid == vendor_id_int and port.pid == product_id_int:
-            logger.info(f"Found device {usb_id} at {port.device}")
-            return port.device
-    
-    # List available devices for debugging
-    available = [
-        f"{p.device} (VID:PID={p.vid:04x}:{p.pid:04x})" 
-        for p in ports 
-        if p.vid is not None and p.pid is not None
-    ]
-    logger.error(f"Device {usb_id} not found. Available devices: {available}")
-    
-    raise SerialDeviceNotFoundError(
-        f"USB device with ID '{usb_id}' not found. "
-        f"Available USB serial devices: {available or 'none'}"
-    )
-
-
-class GCodeProxy:
-    """
-    Core GCode proxy that handles communication between TCP clients and serial devices.
+    Core GCode device that handles communication between TCP clients and serial devices.
     
     This class manages the serial connection and provides methods for sending
     GCode commands and receiving responses using non-blocking async operations.
@@ -93,9 +39,10 @@ class GCodeProxy:
         response_handler: ResponseHandler | None = None,
         response_timeout: float = 5.0,
         read_buffer_size: int = 4096,
+        initialization_delay: float = 0.1,
     ):
         """
-        Initialize the GCode proxy.
+        Initialize the GCode device.
         
         Args:
             usb_id: USB device ID in vendor:product format.
@@ -104,6 +51,7 @@ class GCodeProxy:
             response_handler: Custom handler for serial responses.
             response_timeout: Timeout in seconds for waiting for device response.
             read_buffer_size: Size of the read buffer for serial communication.
+            initialization_delay: Delay in seconds to allow device initialization after connection.
         """
         self.usb_id = usb_id
         self.baud_rate = baud_rate
@@ -111,6 +59,7 @@ class GCodeProxy:
         self.response_handler = response_handler or DefaultResponseHandler()
         self.response_timeout = response_timeout
         self.read_buffer_size = read_buffer_size
+        self.initialization_delay = initialization_delay
         
         self._serial_port: str | None = None
         self._reader: asyncio.StreamReader | None = None
@@ -120,7 +69,7 @@ class GCodeProxy:
     
     @property
     def is_connected(self) -> bool:
-        """Check if the proxy is connected to the serial device."""
+        """Check if the device is connected to the serial device."""
         return self._connected and self._writer is not None
     
     async def connect(self) -> None:
@@ -147,7 +96,7 @@ class GCodeProxy:
             logger.info(f"Connected to {self._serial_port} at {self.baud_rate} baud")
             
             # Give the device a moment to initialize
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(self.initialization_delay)
             
             # Flush any startup messages from the device
             await self._flush_input()
@@ -334,7 +283,7 @@ class GCodeProxy:
                 responses.append(response)
         return responses
     
-    async def __aenter__(self) -> "GCodeProxy":
+    async def __aenter__(self) -> "GCodeDevice":
         """Async context manager entry."""
         await self.connect()
         return self

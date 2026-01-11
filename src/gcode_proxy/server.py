@@ -2,14 +2,15 @@
 TCP Server for GCode Proxy.
 
 This module provides the async TCP server that accepts client connections
-and forwards GCode commands to the serial device via the GCodeProxy core.
+and forwards GCode commands to the serial device via the GCodeDevice core.
 """
 
 import asyncio
 import logging
-from typing import Callable, Awaitable
+# from typing import Callable, Awaitable
 
-from .core import GCodeProxy, SerialConnectionError
+from .device import GCodeDevice
+from .utils import SerialConnectionError
 from .handlers import GCodeHandler, ResponseHandler
 
 
@@ -21,12 +22,12 @@ class GCodeServer:
     Async TCP server for receiving GCode commands from clients.
     
     This server accepts TCP connections, reads GCode commands,
-    forwards them to the USB device via GCodeProxy, and returns responses.
+    forwards them to the USB device via GCodeDevice, and returns responses.
     """
     
     def __init__(
         self,
-        proxy: GCodeProxy,
+        device: GCodeDevice,
         address: str = "0.0.0.0",
         port: int = 8080,
     ):
@@ -34,11 +35,11 @@ class GCodeServer:
         Initialize the GCode server.
         
         Args:
-            proxy: The GCodeProxy instance for device communication.
+            device: The GCodeDevice instance for device communication.
             address: The address to bind the server to.
             port: The port to listen on.
         """
-        self.proxy = proxy
+        self.device = device
         self.address = address
         self.port = port
         
@@ -194,7 +195,7 @@ class GCodeServer:
                 
                 for command in commands:
                     try:
-                        response = await self.proxy.send_gcode(command, client_address)
+                        response = await self.device.send_gcode(command, client_address)
                         if response:
                             responses.append(response)
                     except SerialConnectionError as e:
@@ -226,84 +227,4 @@ class GCodeServer:
                 break
 
 
-class GCodeProxyService:
-    """
-    High-level service combining the TCP server and GCode proxy.
-    
-    This class provides a convenient interface for running the complete
-    proxy service with proper lifecycle management.
-    """
-    
-    def __init__(
-        self,
-        usb_id: str,
-        baud_rate: int = 115200,
-        address: str = "0.0.0.0",
-        port: int = 8080,
-        gcode_handler: GCodeHandler | None = None,
-        response_handler: ResponseHandler | None = None,
-    ):
-        """
-        Initialize the proxy service.
-        
-        Args:
-            usb_id: USB device ID in vendor:product format.
-            baud_rate: Serial baud rate for the device.
-            address: Address to bind the server to.
-            port: Port to listen on.
-            gcode_handler: Optional custom GCode handler.
-            response_handler: Optional custom response handler.
-        """
-        self.proxy = GCodeProxy(
-            usb_id=usb_id,
-            baud_rate=baud_rate,
-            gcode_handler=gcode_handler,
-            response_handler=response_handler,
-        )
-        self.server = GCodeServer(
-            proxy=self.proxy,
-            address=address,
-            port=port,
-        )
-    
-    async def run(self) -> None:
-        """
-        Run the proxy service.
-        
-        Connects to the serial device and starts the TCP server.
-        Runs until interrupted.
-        """
-        try:
-            # Connect to the serial device
-            await self.proxy.connect()
-            
-            # Start and run the server
-            await self.server.serve_forever()
-            
-        finally:
-            # Clean up
-            await self.server.stop()
-            await self.proxy.disconnect()
-    
-    async def start(self) -> None:
-        """
-        Start the service without blocking.
-        
-        Use this when you want to run the service in the background.
-        """
-        await self.proxy.connect()
-        await self.server.start()
-    
-    async def stop(self) -> None:
-        """Stop the service."""
-        await self.server.stop()
-        await self.proxy.disconnect()
-    
-    async def __aenter__(self) -> "GCodeProxyService":
-        """Async context manager entry."""
-        await self.start()
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Async context manager exit."""
-        await self.stop()
+

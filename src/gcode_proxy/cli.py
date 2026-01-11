@@ -18,15 +18,16 @@ from typing import Any
 import click
 
 from .config import (
-    Config,
     DEFAULT_CONFIG_PATH,
     ENV_CONFIG_FILE,
     ENV_DEVICE_BAUD_RATE,
+    ENV_DEVICE_SERIAL_DELAY,
     ENV_DEVICE_USB_ID,
     ENV_SERVER_ADDRESS,
     ENV_SERVER_PORT,
+    Config,
 )
-from .server import GCodeProxyService
+from .service import GCodeProxyService
 
 
 def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
@@ -86,6 +87,12 @@ def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
     help=f"Serial baud rate. [env: {ENV_DEVICE_BAUD_RATE}]",
 )
 @click.option(
+    "--serial-delay",
+    type=float,
+    default=None,
+    help=f"Device initialization delay in seconds. [env: {ENV_DEVICE_SERIAL_DELAY}]",
+)
+@click.option(
     "-v", "--verbose",
     is_flag=True,
     default=False,
@@ -110,6 +117,7 @@ def main(
     address: str | None,
     usb_id: str | None,
     baud_rate: int | None,
+    serial_delay: float | None,
     verbose: bool,
     quiet: bool,
     generate_config: bool,
@@ -157,6 +165,8 @@ def main(
         cli_args["usb_id"] = usb_id
     if baud_rate is not None:
         cli_args["baud_rate"] = baud_rate
+    if serial_delay is not None:
+        cli_args["serial_delay"] = serial_delay
     
     # Load configuration
     config = Config.load(config_file=config_file, cli_args=cli_args)
@@ -173,14 +183,16 @@ def main(
         return
     
     # Log the configuration being used
-    logger.info(f"Starting GCode Proxy Server")
+    logger.info("Starting GCode Proxy Server")
     logger.info(f"  Server: {config.server.address}:{config.server.port}")
     logger.info(f"  Device: {config.device.usb_id} @ {config.device.baud_rate} baud")
+    logger.info(f"  Serial delay: {config.device.serial_delay}s")
     
     # Create and run the service
     service = GCodeProxyService(
         usb_id=config.device.usb_id,
         baud_rate=config.device.baud_rate,
+        serial_delay=config.device.serial_delay,
         address=config.server.address,
         port=config.server.port,
     )
@@ -188,26 +200,33 @@ def main(
     # Set up signal handlers for graceful shutdown
     def handle_signal(signum: int, frame: Any) -> None:
         logger.info(f"Received signal {signum}, shutting down...")
-        raise KeyboardInterrupt()
-    
-    # Register signal handlers
-    if sys.platform != "win32":
-        signal.signal(signal.SIGTERM, handle_signal)
-        signal.signal(signal.SIGHUP, handle_signal)
-    
-    # Run the async service
-    try:
-        asyncio.run(run_service(service))
-    except KeyboardInterrupt:
-        logger.info("Interrupted by user")
-    except Exception as e:
-        logger.error(f"Fatal error: {e}")
-        if verbose:
-            import traceback
-            traceback.print_exc()
-        sys.exit(1)
-    
-    logger.info("GCode Proxy Server stopped")
+        
+        # Set up signal handlers for graceful shutdown
+        class ExitSignal(Exception):  # noqa: N818
+            pass
+
+        def handle_signal(signum: int, frame: Any) -> None:
+            logger.info(f"Received signal {signum}, shutting down...")
+            raise ExitSignal()
+
+        # Register signal handlers
+        if sys.platform != "win32":
+            signal.signal(signal.SIGTERM, handle_signal)
+            signal.signal(signal.SIGHUP, handle_signal)
+
+        # Run the async service
+        try:
+            asyncio.run(run_service(service))
+        except (ExitSignal, KeyboardInterrupt):
+            logger.info("Interrupted by user")
+        except Exception as e:
+            logger.error(f"Fatal error: {e}")
+            if verbose:
+                import traceback
+                traceback.print_exc()
+            sys.exit(1)
+
+        logger.info("GCode Proxy Server stopped")
 
 
 async def run_service(service: GCodeProxyService) -> None:

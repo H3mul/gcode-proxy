@@ -3,14 +3,19 @@
 __version__ = "0.1.0"
 __author__ = "GCode Proxy Team"
 
-from .core import GCodeProxy
+from .device import GCodeDevice
+from .service import GCodeProxyService
 from .server import GCodeServer
 from .handlers import GCodeHandler, ResponseHandler
+from .utils import SerialDeviceNotFoundError, SerialConnectionError
 
 __all__ = [
-    "GCodeProxy",
+    "GCodeDevice",
+    "GCodeProxyService",
     "GCodeServer",
     "GCodeHandler",
     "ResponseHandler",
+    "SerialDeviceNotFoundError",
+    "SerialConnectionError",
     "__version__",
 ]
