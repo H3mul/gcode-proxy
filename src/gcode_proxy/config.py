@@ -1,0 +1,226 @@
+"""Configuration management for GCode Proxy Server.
+
+Handles configuration loading with the following precedence (highest to lowest):
+1. Environment variables
+2. CLI arguments
+3. Config file
+4. Default values
+"""
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+DEFAULT_CONFIG_PATH = Path.home() / ".config" / "gcode-proxy" / "config.yaml"
+
+# Environment variable names
+ENV_SERVER_PORT = "SERVER_PORT"
+ENV_SERVER_ADDRESS = "SERVER_ADDRESS"
+ENV_DEVICE_USB_ID = "DEVICE_USB_ID"
+ENV_DEVICE_BAUD_RATE = "DEVICE_BAUD_RATE"
+ENV_CONFIG_FILE = "GCODE_PROXY_CONFIG"
+
+
+@dataclass
+class ServerConfig:
+    """Server configuration settings."""
+    
+    port: int = 8080
+    address: str = "0.0.0.0"
+
+
+@dataclass
+class DeviceConfig:
+    """USB device configuration settings."""
+    
+    usb_id: str = "303a:4001"
+    baud_rate: int = 115200
+
+
+@dataclass
+class Config:
+    """Main configuration container."""
+    
+    server: ServerConfig = field(default_factory=ServerConfig)
+    device: DeviceConfig = field(default_factory=DeviceConfig)
+    
+    @classmethod
+    def load(
+        cls,
+        config_file: Path | str | None = None,
+        cli_args: dict[str, Any] | None = None,
+    ) -> "Config":
+        """Load configuration from all sources with proper precedence.
+        
+        Precedence (highest to lowest):
+        1. Environment variables
+        2. CLI arguments
+        3. Config file
+        4. Default values
+        
+        Args:
+            config_file: Path to configuration file. If None, uses default or env var.
+            cli_args: Dictionary of CLI arguments.
+            
+        Returns:
+            Loaded and merged configuration.
+        """
+        config = cls()
+        
+        # Determine config file path
+        if config_file is None:
+            config_file = os.environ.get(ENV_CONFIG_FILE, str(DEFAULT_CONFIG_PATH))
+        
+        config_path = Path(config_file).expanduser()
+        
+        # Load from config file if it exists
+        if config_path.exists():
+            config = cls._load_from_file(config_path)
+        
+        # Override with CLI arguments
+        if cli_args:
+            config = cls._apply_cli_args(config, cli_args)
+        
+        # Override with environment variables (highest precedence)
+        config = cls._apply_env_vars(config)
+        
+        return config
+    
+    @classmethod
+    def _load_from_file(cls, path: Path) -> "Config":
+        """Load configuration from YAML file.
+        
+        Args:
+            path: Path to the YAML config file.
+            
+        Returns:
+            Configuration loaded from file.
+        """
+        config = cls()
+        
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        except (yaml.YAMLError, OSError) as e:
+            # Log warning and return defaults
+            print(f"Warning: Failed to load config file {path}: {e}")
+            return config
+        
+        # Parse server config
+        if "server" in data:
+            server_data = data["server"]
+            if "port" in server_data:
+                config.server.port = int(server_data["port"])
+            if "address" in server_data:
+                config.server.address = str(server_data["address"])
+        
+        # Parse device config
+        if "device" in data:
+            device_data = data["device"]
+            if "usb-id" in device_data:
+                config.device.usb_id = str(device_data["usb-id"])
+            elif "usb_id" in device_data:
+                config.device.usb_id = str(device_data["usb_id"])
+            if "baud-rate" in device_data:
+                config.device.baud_rate = int(device_data["baud-rate"])
+            elif "baud_rate" in device_data:
+                config.device.baud_rate = int(device_data["baud_rate"])
+        
+        return config
+    
+    @classmethod
+    def _apply_cli_args(cls, config: "Config", cli_args: dict[str, Any]) -> "Config":
+        """Apply CLI arguments to configuration.
+        
+        Args:
+            config: Existing configuration to modify.
+            cli_args: Dictionary of CLI arguments.
+            
+        Returns:
+            Modified configuration.
+        """
+        if cli_args.get("port") is not None:
+            config.server.port = int(cli_args["port"])
+        
+        if cli_args.get("address") is not None:
+            config.server.address = str(cli_args["address"])
+        
+        if cli_args.get("usb_id") is not None:
+            config.device.usb_id = str(cli_args["usb_id"])
+        
+        if cli_args.get("baud_rate") is not None:
+            config.device.baud_rate = int(cli_args["baud_rate"])
+        
+        return config
+    
+    @classmethod
+    def _apply_env_vars(cls, config: "Config") -> "Config":
+        """Apply environment variables to configuration.
+        
+        Args:
+            config: Existing configuration to modify.
+            
+        Returns:
+            Modified configuration.
+        """
+        if ENV_SERVER_PORT in os.environ:
+            config.server.port = int(os.environ[ENV_SERVER_PORT])
+        
+        if ENV_SERVER_ADDRESS in os.environ:
+            config.server.address = os.environ[ENV_SERVER_ADDRESS]
+        
+        if ENV_DEVICE_USB_ID in os.environ:
+            config.device.usb_id = os.environ[ENV_DEVICE_USB_ID]
+        
+        if ENV_DEVICE_BAUD_RATE in os.environ:
+            config.device.baud_rate = int(os.environ[ENV_DEVICE_BAUD_RATE])
+        
+        return config
+    
+    def to_dict(self) -> dict[str, Any]:
+        """Convert configuration to dictionary.
+        
+        Returns:
+            Dictionary representation of configuration.
+        """
+        return {
+            "server": {
+                "port": self.server.port,
+                "address": self.server.address,
+            },
+            "device": {
+                "usb_id": self.device.usb_id,
+                "baud_rate": self.device.baud_rate,
+            },
+        }
+    
+    def save(self, path: Path | str | None = None) -> None:
+        """Save configuration to YAML file.
+        
+        Args:
+            path: Path to save to. If None, uses default config path.
+        """
+        if path is None:
+            path = DEFAULT_CONFIG_PATH
+        
+        save_path = Path(path).expanduser()
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Convert to YAML-friendly format with hyphenated keys
+        data = {
+            "server": {
+                "port": self.server.port,
+                "address": self.server.address,
+            },
+            "device": {
+                "usb-id": self.device.usb_id,
+                "baud-rate": self.device.baud_rate,
+            },
+        }
+        
+        with open(save_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f, default_flow_style=False)
