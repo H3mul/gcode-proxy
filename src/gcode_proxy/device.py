@@ -8,9 +8,6 @@ and communication with USB-connected devices using non-blocking async operations
 import asyncio
 import logging
 
-import serial
-from serial_asyncio import open_serial_connection
-
 from .handlers import (
     GCodeHandler,
     ResponseHandler,
@@ -25,11 +22,208 @@ logger = logging.getLogger(__name__)
 
 class GCodeDevice:
     """
-    Core GCode device that handles communication between TCP clients and serial devices.
+    Base GCode device class that can be used for dry-run testing.
     
-    This class manages the serial connection and provides methods for sending
-    GCode commands and receiving responses using non-blocking async operations.
+    This class provides dummy send/receive operations that log commands
+    but don't actually communicate with any hardware. Subclass this
+    and override _send() and _receive() for actual device communication.
     """
+    
+    def __init__(
+        self,
+        gcode_handler: GCodeHandler | None = None,
+        response_handler: ResponseHandler | None = None,
+        response_timeout: float = 5.0,
+    ):
+        """
+        Initialize the GCode device.
+        
+        Args:
+            gcode_handler: Custom handler for GCode commands.
+            response_handler: Custom handler for serial responses.
+            response_timeout: Timeout in seconds for waiting for device response.
+        """
+        self.gcode_handler = gcode_handler or DefaultGCodeHandler()
+        self.response_handler = response_handler or DefaultResponseHandler()
+        self.response_timeout = response_timeout
+        
+        self._lock = asyncio.Lock()
+        self._connected = False
+    
+    @property
+    def is_connected(self) -> bool:
+        """Check if the device is connected."""
+        return self._connected
+    
+    async def connect(self) -> None:
+        """
+        Connect to the device.
+        
+        For the base class (dry-run mode), this simply marks the device as connected.
+        """
+        if self._connected:
+            logger.warning("Already connected to device")
+            return
+        
+        self._connected = True
+        logger.info("Connected to dry-run device (no actual hardware)")
+    
+    async def disconnect(self) -> None:
+        """Disconnect from the device."""
+        if self._connected:
+            self._connected = False
+            logger.info("Disconnected from dry-run device")
+    
+    async def _send(self, gcode: str) -> None:
+        """
+        Send a GCode command to the device.
+        
+        Override this method in subclasses for actual hardware communication.
+        
+        Args:
+            gcode: The GCode command to send (already has newline appended).
+        """
+        logger.debug(f"[DRY-RUN] Would send: {gcode.strip()}")
+    
+    async def _receive(self) -> str:
+        """
+        Receive a response from the device.
+        
+        Override this method in subclasses for actual hardware communication.
+        
+        Returns:
+            The response string from the device.
+        """
+        logger.debug("[DRY-RUN] Returning simulated 'ok' response")
+        return "ok"
+    
+    async def send_gcode(
+        self,
+        gcode: str,
+        client_address: tuple[str, int] = ("unknown", 0),
+    ) -> str:
+        """
+        Send a GCode command to the device and wait for a response.
+        
+        This method is thread-safe and uses a lock to ensure only one
+        command is processed at a time.
+        
+        Args:
+            gcode: The GCode command to send.
+            client_address: The client address for handler callbacks.
+            
+        Returns:
+            The response from the device.
+            
+        Raises:
+            SerialConnectionError: If not connected or communication fails.
+        """
+        if not self.is_connected:
+            raise SerialConnectionError("Not connected to device")
+        
+        async with self._lock:
+            return await self._handle_gcode_unlocked(gcode, client_address)
+    
+    async def _handle_gcode_unlocked(
+        self,
+        gcode: str,
+        client_address: tuple[str, int],
+    ) -> str:
+        """
+        Internal method to send GCode without acquiring the lock.
+        
+        Args:
+            gcode: The GCode command to send.
+            client_address: The client address for handler callbacks.
+            
+        Returns:
+            The response from the device.
+        """
+        # Process through handler
+        processed_gcode = await self.gcode_handler.on_gcode_received(
+            gcode, client_address
+        )
+        
+        # Ensure the command ends with a newline
+        if not processed_gcode.endswith("\n"):
+            processed_gcode += "\n"
+        
+        try:
+            # Send the command
+            await self._send(processed_gcode)
+            
+            logger.debug(f"Sent: {processed_gcode.strip()}")
+            
+            # Notify handler that command was sent
+            await self.gcode_handler.on_gcode_sent(processed_gcode, client_address)
+            
+            # Wait for and collect response
+            response = await self._receive()
+            
+            # Process response through handler
+            processed_response = await self.response_handler.on_response_received(
+                response, gcode, client_address
+            )
+            
+            # Notify handler that response was sent
+            await self.response_handler.on_response_sent(processed_response, client_address)
+            
+            return processed_response
+            
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout waiting for response to: {gcode.strip()}")
+            return ""
+        except Exception as e:
+            logger.error(f"Error sending GCode: {e}")
+            raise SerialConnectionError(f"Failed to send GCode: {e}") from e
+    
+    async def send_multiple(
+        self,
+        gcodes: list[str],
+        client_address: tuple[str, int] = ("unknown", 0),
+    ) -> list[str]:
+        """
+        Send multiple GCode commands sequentially.
+        
+        Args:
+            gcodes: List of GCode commands to send.
+            client_address: The client address for handler callbacks.
+            
+        Returns:
+            List of responses, one per command.
+        """
+        responses = []
+        for gcode in gcodes:
+            if gcode.strip():  # Skip empty lines
+                response = await self.send_gcode(gcode, client_address)
+                responses.append(response)
+        return responses
+    
+    async def __aenter__(self) -> "GCodeDevice":
+        """Async context manager entry."""
+        await self.connect()
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Async context manager exit."""
+        await self.disconnect()
+
+
+class GCodeSerialDevice(GCodeDevice):
+    """
+    GCode device that communicates with USB serial devices.
+    
+    This class extends GCodeDevice with actual serial communication
+    capabilities using pyserial and serial_asyncio.
+    """
+    
+    # Import serial modules at class level to avoid requiring them for base class
+    try:
+        import serial as _serial_module
+        from serial_asyncio import open_serial_connection as _open_serial_connection
+    except ImportError:
+        _serial_module = None  # type: ignore[assignment]
+        _open_serial_connection = None  # type: ignore[assignment]
     
     def __init__(
         self,
@@ -42,7 +236,7 @@ class GCodeDevice:
         initialization_delay: float = 0.1,
     ):
         """
-        Initialize the GCode device.
+        Initialize the GCode serial device.
         
         Args:
             usb_id: USB device ID in vendor:product format.
@@ -53,19 +247,19 @@ class GCodeDevice:
             read_buffer_size: Size of the read buffer for serial communication.
             initialization_delay: Delay in seconds to allow device initialization after connection.
         """
+        super().__init__(
+            gcode_handler=gcode_handler,
+            response_handler=response_handler,
+            response_timeout=response_timeout,
+        )
         self.usb_id = usb_id
         self.baud_rate = baud_rate
-        self.gcode_handler = gcode_handler or DefaultGCodeHandler()
-        self.response_handler = response_handler or DefaultResponseHandler()
-        self.response_timeout = response_timeout
         self.read_buffer_size = read_buffer_size
         self.initialization_delay = initialization_delay
         
         self._serial_port: str | None = None
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
-        self._lock = asyncio.Lock()
-        self._connected = False
     
     @property
     def is_connected(self) -> bool:
@@ -87,8 +281,14 @@ class GCodeDevice:
         # Find the serial port for the USB device
         self._serial_port = find_serial_port_by_usb_id(self.usb_id)
         
+        if self._open_serial_connection is None:
+            raise SerialConnectionError(
+                "serial_asyncio module is not available. "
+                "Install it with: pip install pyserial-asyncio"
+            )
+        
         try:
-            self._reader, self._writer = await open_serial_connection(
+            self._reader, self._writer = await self._open_serial_connection(
                 url=self._serial_port,
                 baudrate=self.baud_rate,
             )
@@ -101,10 +301,13 @@ class GCodeDevice:
             # Flush any startup messages from the device
             await self._flush_input()
             
-        except serial.SerialException as e:
-            raise SerialConnectionError(
-                f"Failed to connect to {self._serial_port}: {e}"
-            ) from e
+        except Exception as e:
+            # Catch serial exceptions without importing serial at module level
+            if self._serial_module and isinstance(e, self._serial_module.SerialException):
+                raise SerialConnectionError(
+                    f"Failed to connect to {self._serial_port}: {e}"
+                ) from e
+            raise
     
     async def disconnect(self) -> None:
         """Disconnect from the serial device."""
@@ -138,88 +341,23 @@ class GCodeDevice:
         except Exception as e:
             logger.debug(f"Error flushing input: {e}")
     
-    async def send_gcode(
-        self,
-        gcode: str,
-        client_address: tuple[str, int] = ("unknown", 0),
-    ) -> str:
+    async def _send(self, gcode: str) -> None:
         """
-        Send a GCode command to the serial device and wait for a response.
-        
-        This method is thread-safe and uses a lock to ensure only one
-        command is processed at a time.
+        Send a GCode command to the serial device.
         
         Args:
-            gcode: The GCode command to send.
-            client_address: The client address for handler callbacks.
-            
-        Returns:
-            The response from the device.
+            gcode: The GCode command to send (already has newline appended).
             
         Raises:
-            SerialConnectionError: If not connected or communication fails.
+            SerialConnectionError: If the serial writer is not available.
         """
-        if not self.is_connected:
-            raise SerialConnectionError("Not connected to serial device")
+        if not self._writer:
+            raise SerialConnectionError("Serial writer is not available")
         
-        async with self._lock:
-            return await self._send_gcode_unlocked(gcode, client_address)
+        self._writer.write(gcode.encode("utf-8"))
+        await self._writer.drain()
     
-    async def _send_gcode_unlocked(
-        self,
-        gcode: str,
-        client_address: tuple[str, int],
-    ) -> str:
-        """
-        Internal method to send GCode without acquiring the lock.
-        
-        Args:
-            gcode: The GCode command to send.
-            client_address: The client address for handler callbacks.
-            
-        Returns:
-            The response from the device.
-        """
-        # Process through handler
-        processed_gcode = await self.gcode_handler.on_gcode_received(
-            gcode, client_address
-        )
-        
-        # Ensure the command ends with a newline
-        if not processed_gcode.endswith("\n"):
-            processed_gcode += "\n"
-        
-        try:
-            # Send the command
-            self._writer.write(processed_gcode.encode("utf-8"))
-            await self._writer.drain()
-            
-            logger.debug(f"Sent: {processed_gcode.strip()}")
-            
-            # Notify handler that command was sent
-            await self.gcode_handler.on_gcode_sent(processed_gcode, client_address)
-            
-            # Wait for and collect response
-            response = await self._read_response()
-            
-            # Process response through handler
-            processed_response = await self.response_handler.on_response_received(
-                response, gcode, client_address
-            )
-            
-            # Notify handler that response was sent
-            await self.response_handler.on_response_sent(processed_response, client_address)
-            
-            return processed_response
-            
-        except asyncio.TimeoutError:
-            logger.warning(f"Timeout waiting for response to: {gcode.strip()}")
-            return ""
-        except Exception as e:
-            logger.error(f"Error sending GCode: {e}")
-            raise SerialConnectionError(f"Failed to send GCode: {e}") from e
-    
-    async def _read_response(self) -> str:
+    async def _receive(self) -> str:
         """
         Read a response from the serial device.
         
@@ -260,34 +398,3 @@ class GCodeDevice:
                 logger.debug("No response received within timeout")
         
         return "\n".join(response_lines)
-    
-    async def send_multiple(
-        self,
-        gcodes: list[str],
-        client_address: tuple[str, int] = ("unknown", 0),
-    ) -> list[str]:
-        """
-        Send multiple GCode commands sequentially.
-        
-        Args:
-            gcodes: List of GCode commands to send.
-            client_address: The client address for handler callbacks.
-            
-        Returns:
-            List of responses, one per command.
-        """
-        responses = []
-        for gcode in gcodes:
-            if gcode.strip():  # Skip empty lines
-                response = await self.send_gcode(gcode, client_address)
-                responses.append(response)
-        return responses
-    
-    async def __aenter__(self) -> "GCodeDevice":
-        """Async context manager entry."""
-        await self.connect()
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Async context manager exit."""
-        await self.disconnect()

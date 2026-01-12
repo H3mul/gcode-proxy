@@ -93,6 +93,12 @@ def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
     help=f"Device initialization delay in seconds. [env: {ENV_DEVICE_SERIAL_DELAY}]",
 )
 @click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Run in dry-run mode without actual serial device communication.",
+)
+@click.option(
     "-v", "--verbose",
     is_flag=True,
     default=False,
@@ -118,6 +124,7 @@ def main(
     usb_id: str | None,
     baud_rate: int | None,
     serial_delay: float | None,
+    dry_run: bool,
     verbose: bool,
     quiet: bool,
     generate_config: bool,
@@ -148,6 +155,9 @@ def main(
         # Use a custom config file
         gcode-proxy-server --config /etc/gcode-proxy/config.yaml
         
+        # Run in dry-run mode (no actual hardware)
+        gcode-proxy-server --dry-run
+        
         # Generate a default config file
         gcode-proxy-server --generate-config
     """
@@ -168,8 +178,16 @@ def main(
     if serial_delay is not None:
         cli_args["serial_delay"] = serial_delay
     
-    # Load configuration
-    config = Config.load(config_file=config_file, cli_args=cli_args)
+    try:
+        # Load configuration (skip device validation in dry-run mode)
+        config = Config.load(
+            config_file=config_file,
+            cli_args=cli_args,
+            skip_device_validation=dry_run,
+        )
+    except ValueError as e:
+        logger.error(f"Configuration error: {e}")
+        sys.exit(1)
     
     # Handle --generate-config
     if generate_config:
@@ -184,49 +202,56 @@ def main(
     
     # Log the configuration being used
     logger.info("Starting GCode Proxy Server")
+    if dry_run:
+        logger.info("  Mode: DRY-RUN (no actual hardware communication)")
+    else:
+        logger.info(f"  Device: {config.device.usb_id} @ {config.device.baud_rate} baud")
+        logger.info(f"  Serial delay: {config.device.serial_delay}s")
     logger.info(f"  Server: {config.server.address}:{config.server.port}")
-    logger.info(f"  Device: {config.device.usb_id} @ {config.device.baud_rate} baud")
-    logger.info(f"  Serial delay: {config.device.serial_delay}s")
     
-    # Create and run the service
-    service = GCodeProxyService(
-        usb_id=config.device.usb_id,
-        baud_rate=config.device.baud_rate,
-        serial_delay=config.device.serial_delay,
-        address=config.server.address,
-        port=config.server.port,
-    )
+    # Create the service based on mode
+    if dry_run:
+        service = GCodeProxyService.create_dry_run(
+            address=config.server.address,
+            port=config.server.port,
+        )
+    else:
+        # usb_id is guaranteed to be set after validation (when not in dry-run mode)
+        assert config.device.usb_id is not None
+        service = GCodeProxyService.create_serial(
+            usb_id=config.device.usb_id,
+            baud_rate=config.device.baud_rate,
+            serial_delay=config.device.serial_delay,
+            address=config.server.address,
+            port=config.server.port,
+        )
     
     # Set up signal handlers for graceful shutdown
+    class ExitSignal(Exception):  # noqa: N818
+        pass
+
     def handle_signal(signum: int, frame: Any) -> None:
         logger.info(f"Received signal {signum}, shutting down...")
-        
-        # Set up signal handlers for graceful shutdown
-        class ExitSignal(Exception):  # noqa: N818
-            pass
+        raise ExitSignal()
 
-        def handle_signal(signum: int, frame: Any) -> None:
-            logger.info(f"Received signal {signum}, shutting down...")
-            raise ExitSignal()
+    # Register signal handlers
+    if sys.platform != "win32":
+        signal.signal(signal.SIGTERM, handle_signal)
+        signal.signal(signal.SIGHUP, handle_signal)
 
-        # Register signal handlers
-        if sys.platform != "win32":
-            signal.signal(signal.SIGTERM, handle_signal)
-            signal.signal(signal.SIGHUP, handle_signal)
+    # Run the async service
+    try:
+        asyncio.run(run_service(service))
+    except (ExitSignal, KeyboardInterrupt):
+        logger.info("Interrupted by user")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
 
-        # Run the async service
-        try:
-            asyncio.run(run_service(service))
-        except (ExitSignal, KeyboardInterrupt):
-            logger.info("Interrupted by user")
-        except Exception as e:
-            logger.error(f"Fatal error: {e}")
-            if verbose:
-                import traceback
-                traceback.print_exc()
-            sys.exit(1)
-
-        logger.info("GCode Proxy Server stopped")
+    logger.info("GCode Proxy Server stopped")
 
 
 async def run_service(service: GCodeProxyService) -> None:

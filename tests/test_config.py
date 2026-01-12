@@ -40,7 +40,7 @@ class TestDeviceConfig:
     def test_default_values(self):
         """Test that DeviceConfig has correct default values."""
         config = DeviceConfig()
-        assert config.usb_id == "303a:4001"
+        assert config.usb_id is None  # No default USB ID (for dry-run support)
         assert config.baud_rate == 115200
 
     def test_custom_values(self):
@@ -58,12 +58,13 @@ class TestConfig:
         config = Config()
         assert config.server.port == 8080
         assert config.server.address == "0.0.0.0"
-        assert config.device.usb_id == "303a:4001"
+        assert config.device.usb_id is None  # No default USB ID (for dry-run support)
         assert config.device.baud_rate == 115200
 
     def test_to_dict(self):
         """Test converting Config to dictionary."""
         config = Config()
+        config.device.usb_id = "303a:4001"  # Set explicitly for test
         data = config.to_dict()
         
         assert data == {
@@ -74,6 +75,7 @@ class TestConfig:
             "device": {
                 "usb_id": "303a:4001",
                 "baud_rate": 115200,
+                "serial_delay": 0.1,
             },
         }
 
@@ -133,10 +135,11 @@ class TestConfigLoadFromFile:
 
     def test_load_from_nonexistent_file_uses_defaults(self):
         """Test that loading from a nonexistent file uses defaults."""
-        config = Config.load(config_file="/nonexistent/path/config.yaml")
+        # Use skip_device_validation since no usb_id is provided
+        config = Config.load(config_file="/nonexistent/path/config.yaml", skip_device_validation=True)
         assert config.server.port == 8080
         assert config.server.address == "0.0.0.0"
-        assert config.device.usb_id == "303a:4001"
+        assert config.device.usb_id is None  # No default USB ID
         assert config.device.baud_rate == 115200
 
     def test_load_partial_config_file(self):
@@ -152,10 +155,11 @@ class TestConfigLoadFromFile:
             config_path = f.name
         
         try:
-            config = Config.load(config_file=config_path)
+            # Use skip_device_validation since no usb_id is provided
+            config = Config.load(config_file=config_path, skip_device_validation=True)
             assert config.server.port == 9000
             assert config.server.address == "0.0.0.0"  # Default
-            assert config.device.usb_id == "303a:4001"  # Default
+            assert config.device.usb_id is None  # No default USB ID
             assert config.device.baud_rate == 115200  # Default
         finally:
             os.unlink(config_path)
@@ -274,11 +278,12 @@ class TestConfigLoadFromEnvVars:
             "address": "127.0.0.1",
         }
         
-        config = Config.load(cli_args=cli_args)
+        # Use skip_device_validation since no usb_id is provided
+        config = Config.load(cli_args=cli_args, skip_device_validation=True)
         
         assert config.server.port == 7000  # From env var
         assert config.server.address == "127.0.0.1"  # From CLI
-        assert config.device.usb_id == "303a:4001"  # Default
+        assert config.device.usb_id is None  # No default USB ID
         assert config.device.baud_rate == 115200  # Default
 
 
@@ -352,7 +357,8 @@ class TestConfigFilePath:
             monkeypatch.setenv(ENV_CONFIG_FILE, config_path)
             
             # Load without specifying config_file - should use env var
-            config = Config.load()
+            # Use skip_device_validation since no usb_id is provided
+            config = Config.load(skip_device_validation=True)
             
             assert config.server.port == 9999
         finally:
@@ -376,7 +382,8 @@ class TestConfigFilePath:
             monkeypatch.setenv(ENV_CONFIG_FILE, env_config_path)
             
             # Load with explicit path - should ignore env var
-            config = Config.load(config_file=explicit_config_path)
+            # Use skip_device_validation since no usb_id is provided
+            config = Config.load(config_file=explicit_config_path, skip_device_validation=True)
             
             assert config.server.port == 2222
         finally:

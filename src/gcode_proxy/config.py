@@ -55,6 +55,7 @@ class Config:
         cls,
         config_file: Path | str | None = None,
         cli_args: dict[str, Any] | None = None,
+        skip_device_validation: bool = False,
     ) -> "Config":
         """Load configuration from all sources with proper precedence.
         
@@ -67,12 +68,13 @@ class Config:
         Args:
             config_file: Path to configuration file. If None, uses default or env var.
             cli_args: Dictionary of CLI arguments.
+            skip_device_validation: If True, skip validation of device settings (for dry-run mode).
             
         Returns:
             Loaded and merged configuration.
             
         Raises:
-            ValueError: If required usb_id is not set after loading all sources.
+            ValueError: If required usb_id is not set after loading all sources (unless skip_device_validation is True).
         """
         config = cls()
         
@@ -94,7 +96,8 @@ class Config:
         config = cls._apply_env_vars(config)
         
         # Validate required configuration
-        config._validate()
+        if not skip_device_validation:
+            config._validate()
         
         return config
     
