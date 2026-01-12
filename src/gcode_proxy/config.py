@@ -23,6 +23,7 @@ ENV_SERVER_ADDRESS = "SERVER_ADDRESS"
 ENV_DEVICE_USB_ID = "DEVICE_USB_ID"
 ENV_DEVICE_BAUD_RATE = "DEVICE_BAUD_RATE"
 ENV_DEVICE_SERIAL_DELAY = "DEVICE_SERIAL_DELAY"
+ENV_GCODE_LOG_FILE = "GCODE_LOG_FILE"
 ENV_CONFIG_FILE = "GCODE_PROXY_CONFIG"
 
 
@@ -41,6 +42,7 @@ class DeviceConfig:
     usb_id: str | None = None
     baud_rate: int = 115200
     serial_delay: float = 0.1
+    gcode_log_file: str | None = None
 
 
 @dataclass
@@ -49,6 +51,7 @@ class Config:
     
     server: ServerConfig = field(default_factory=ServerConfig)
     device: DeviceConfig = field(default_factory=DeviceConfig)
+    gcode_log_file: str | None = None
     
     @classmethod
     def load(
@@ -74,7 +77,8 @@ class Config:
             Loaded and merged configuration.
             
         Raises:
-            ValueError: If required usb_id is not set after loading all sources (unless skip_device_validation is True).
+            ValueError: If required usb_id is not set after loading all sources
+                (unless skip_device_validation is True).
         """
         config = cls()
         
@@ -144,6 +148,16 @@ class Config:
                 config.device.serial_delay = float(device_data["serial-delay"])
             elif "serial_delay" in device_data:
                 config.device.serial_delay = float(device_data["serial_delay"])
+            if "gcode-log-file" in device_data:
+                config.device.gcode_log_file = str(device_data["gcode-log-file"])
+            elif "gcode_log_file" in device_data:
+                config.device.gcode_log_file = str(device_data["gcode_log_file"])
+        
+        # Parse gcode-log-file at root level
+        if "gcode-log-file" in data:
+            config.gcode_log_file = str(data["gcode-log-file"])
+        elif "gcode_log_file" in data:
+            config.gcode_log_file = str(data["gcode_log_file"])
         
         return config
     
@@ -173,6 +187,9 @@ class Config:
         if cli_args.get("serial_delay") is not None:
             config.device.serial_delay = float(cli_args["serial_delay"])
         
+        if cli_args.get("gcode_log_file") is not None:
+            config.gcode_log_file = str(cli_args["gcode_log_file"])
+        
         return config
     
     @classmethod
@@ -200,6 +217,9 @@ class Config:
         if ENV_DEVICE_SERIAL_DELAY in os.environ:
             config.device.serial_delay = float(os.environ[ENV_DEVICE_SERIAL_DELAY])
         
+        if ENV_GCODE_LOG_FILE in os.environ:
+            config.gcode_log_file = os.environ[ENV_GCODE_LOG_FILE]
+        
         return config
     
     def _validate(self) -> None:
@@ -222,7 +242,7 @@ class Config:
         Returns:
             Dictionary representation of configuration.
         """
-        return {
+        result: dict[str, Any] = {
             "server": {
                 "port": self.server.port,
                 "address": self.server.address,
@@ -233,6 +253,9 @@ class Config:
                 "serial_delay": self.device.serial_delay,
             },
         }
+        if self.gcode_log_file is not None:
+            result["gcode_log_file"] = self.gcode_log_file
+        return result
     
     def save(self, path: Path | str | None = None) -> None:
         """Save configuration to YAML file.
@@ -247,7 +270,7 @@ class Config:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Convert to YAML-friendly format with hyphenated keys
-        data = {
+        data: dict[str, Any] = {
             "server": {
                 "port": self.server.port,
                 "address": self.server.address,
@@ -258,6 +281,9 @@ class Config:
                 "serial-delay": self.device.serial_delay,
             },
         }
+        
+        if self.gcode_log_file is not None:
+            data["gcode-log-file"] = self.gcode_log_file
         
         with open(save_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f, default_flow_style=False)

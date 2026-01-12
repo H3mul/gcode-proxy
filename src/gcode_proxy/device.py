@@ -7,6 +7,8 @@ and communication with USB-connected devices using non-blocking async operations
 
 import asyncio
 import logging
+from datetime import datetime
+from pathlib import Path
 
 from .handlers import (
     GCodeHandler,
@@ -34,6 +36,7 @@ class GCodeDevice:
         gcode_handler: GCodeHandler | None = None,
         response_handler: ResponseHandler | None = None,
         response_timeout: float = 5.0,
+        gcode_log_file: str | None = None,
     ):
         """
         Initialize the GCode device.
@@ -42,13 +45,16 @@ class GCodeDevice:
             gcode_handler: Custom handler for GCode commands.
             response_handler: Custom handler for serial responses.
             response_timeout: Timeout in seconds for waiting for device response.
+            gcode_log_file: Optional path to file for logging GCode communication.
         """
         self.gcode_handler = gcode_handler or DefaultGCodeHandler()
         self.response_handler = response_handler or DefaultResponseHandler()
         self.response_timeout = response_timeout
+        self.gcode_log_file = Path(gcode_log_file) if gcode_log_file else None
         
         self._lock = asyncio.Lock()
         self._connected = False
+        self._log_lock = asyncio.Lock()
     
     @property
     def is_connected(self) -> bool:
@@ -67,6 +73,10 @@ class GCodeDevice:
         
         self._connected = True
         logger.info("Connected to dry-run device (no actual hardware)")
+        
+        # Initialize log file if specified
+        if self.gcode_log_file:
+            await self._initialize_log_file()
     
     async def disconnect(self) -> None:
         """Disconnect from the device."""
@@ -96,6 +106,46 @@ class GCodeDevice:
         """
         logger.debug("[DRY-RUN] Returning simulated 'ok' response")
         return "ok"
+    
+    async def _initialize_log_file(self) -> None:
+        """Initialize the GCode log file."""
+        if not self.gcode_log_file:
+            return
+        
+        try:
+            # Create parent directories if needed
+            self.gcode_log_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Create the file if it doesn't exist
+            if not self.gcode_log_file.exists():
+                self.gcode_log_file.touch()
+                logger.info(f"Created GCode log file: {self.gcode_log_file}")
+        except Exception as e:
+            logger.error(f"Failed to initialize log file {self.gcode_log_file}: {e}")
+            self.gcode_log_file = None
+    
+    async def _log_gcode(self, gcode: str, source: str) -> None:
+        """
+        Log a GCode command or response to the log file.
+        
+        Args:
+            gcode: The GCode command or response to log.
+            source: The source (client address or device identifier).
+        """
+        if not self.gcode_log_file:
+            return
+        
+        try:
+            # Format: [timestamp][source]: message
+
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            log_entry = f"{timestamp} - {source}: {gcode.strip()}"
+            
+            async with self._log_lock:
+                with open(self.gcode_log_file, "a", encoding="utf-8") as f:
+                    f.write(log_entry + "\n")
+        except Exception as e:
+            logger.error(f"Failed to write to GCode log file: {e}")
     
     async def send_gcode(
         self,
@@ -154,6 +204,10 @@ class GCodeDevice:
             
             logger.debug(f"Sent: {processed_gcode.strip()}")
             
+            # Log the GCode command
+            source_address = f"{client_address[0]}:{client_address[1]}"
+            await self._log_gcode(processed_gcode, source_address)
+            
             # Notify handler that command was sent
             await self.gcode_handler.on_gcode_sent(processed_gcode, client_address)
             
@@ -164,6 +218,9 @@ class GCodeDevice:
             processed_response = await self.response_handler.on_response_received(
                 response, gcode, client_address
             )
+            
+            # Log the response
+            await self._log_gcode(processed_response, "device")
             
             # Notify handler that response was sent
             await self.response_handler.on_response_sent(processed_response, client_address)
@@ -234,6 +291,7 @@ class GCodeSerialDevice(GCodeDevice):
         response_timeout: float = 5.0,
         read_buffer_size: int = 4096,
         initialization_delay: float = 0.1,
+        gcode_log_file: str | None = None,
     ):
         """
         Initialize the GCode serial device.
@@ -246,11 +304,13 @@ class GCodeSerialDevice(GCodeDevice):
             response_timeout: Timeout in seconds for waiting for device response.
             read_buffer_size: Size of the read buffer for serial communication.
             initialization_delay: Delay in seconds to allow device initialization after connection.
+            gcode_log_file: Optional path to file for logging GCode communication.
         """
         super().__init__(
             gcode_handler=gcode_handler,
             response_handler=response_handler,
             response_timeout=response_timeout,
+            gcode_log_file=gcode_log_file,
         )
         self.usb_id = usb_id
         self.baud_rate = baud_rate

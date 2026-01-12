@@ -54,6 +54,7 @@ class GCodeProxyService:
         serial_delay: float = 0.1,
         gcode_handler: GCodeHandler | None = None,
         response_handler: ResponseHandler | None = None,
+        gcode_log_file: str | None = None,
     ) -> "GCodeProxyService":
         """
         Create a proxy service with a serial device.
@@ -69,6 +70,7 @@ class GCodeProxyService:
             serial_delay: Delay in seconds for device initialization after connection.
             gcode_handler: Optional custom GCode handler.
             response_handler: Optional custom response handler.
+            gcode_log_file: Optional path to file for logging GCode communication.
             
         Returns:
             A configured GCodeProxyService instance.
@@ -79,6 +81,7 @@ class GCodeProxyService:
             initialization_delay=serial_delay,
             gcode_handler=gcode_handler,
             response_handler=response_handler,
+            gcode_log_file=gcode_log_file,
         )
         return cls(device=device, address=address, port=port)
     
@@ -89,6 +92,7 @@ class GCodeProxyService:
         port: int = 8080,
         gcode_handler: GCodeHandler | None = None,
         response_handler: ResponseHandler | None = None,
+        gcode_log_file: str | None = None,
     ) -> "GCodeProxyService":
         """
         Create a proxy service with a dry-run device.
@@ -101,6 +105,7 @@ class GCodeProxyService:
             port: Port to listen on.
             gcode_handler: Optional custom GCode handler.
             response_handler: Optional custom response handler.
+            gcode_log_file: Optional path to file for logging GCode communication.
             
         Returns:
             A configured GCodeProxyService instance.
@@ -108,6 +113,7 @@ class GCodeProxyService:
         device = GCodeDevice(
             gcode_handler=gcode_handler,
             response_handler=response_handler,
+            gcode_log_file=gcode_log_file,
         )
         return cls(device=device, address=address, port=port)
     

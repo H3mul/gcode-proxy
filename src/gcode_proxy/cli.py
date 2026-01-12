@@ -23,6 +23,7 @@ from .config import (
     ENV_DEVICE_BAUD_RATE,
     ENV_DEVICE_SERIAL_DELAY,
     ENV_DEVICE_USB_ID,
+    ENV_GCODE_LOG_FILE,
     ENV_SERVER_ADDRESS,
     ENV_SERVER_PORT,
     Config,
@@ -93,6 +94,12 @@ def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
     help=f"Device initialization delay in seconds. [env: {ENV_DEVICE_SERIAL_DELAY}]",
 )
 @click.option(
+    "--gcode-log-file",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=f"Path to file for logging all GCode communication. [env: {ENV_GCODE_LOG_FILE}]",
+)
+@click.option(
     "--dry-run",
     is_flag=True,
     default=False,
@@ -124,6 +131,7 @@ def main(
     usb_id: str | None,
     baud_rate: int | None,
     serial_delay: float | None,
+    gcode_log_file: Path | None,
     dry_run: bool,
     verbose: bool,
     quiet: bool,
@@ -177,6 +185,8 @@ def main(
         cli_args["baud_rate"] = baud_rate
     if serial_delay is not None:
         cli_args["serial_delay"] = serial_delay
+    if gcode_log_file is not None:
+        cli_args["gcode_log_file"] = str(gcode_log_file)
     
     try:
         # Load configuration (skip device validation in dry-run mode)
@@ -208,12 +218,15 @@ def main(
         logger.info(f"  Device: {config.device.usb_id} @ {config.device.baud_rate} baud")
         logger.info(f"  Serial delay: {config.device.serial_delay}s")
     logger.info(f"  Server: {config.server.address}:{config.server.port}")
+    if config.gcode_log_file:
+        logger.info(f"  GCode log file: {config.gcode_log_file}")
     
     # Create the service based on mode
     if dry_run:
         service = GCodeProxyService.create_dry_run(
             address=config.server.address,
             port=config.server.port,
+            gcode_log_file=config.gcode_log_file,
         )
     else:
         # usb_id is guaranteed to be set after validation (when not in dry-run mode)
@@ -224,6 +237,7 @@ def main(
             serial_delay=config.device.serial_delay,
             address=config.server.address,
             port=config.server.port,
+            gcode_log_file=config.gcode_log_file,
         )
     
     # Set up signal handlers for graceful shutdown

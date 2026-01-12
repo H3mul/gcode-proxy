@@ -33,3 +33,11 @@ device:
   # Common values: 9600, 19200, 38400, 57600, 115200, 250000
   # Environment variable: DEVICE_BAUD_RATE
   baud-rate: 115200
+
+# GCode communication log file
+# Optional path to a file where all GCode commands sent to the device
+# and responses received from the device will be logged.
+# Log entries include timestamp and source (client address or 'device').
+# If the file exists, new entries are appended to the end.
+# Environment variable: GCODE_LOG_FILE
+# gcode-log-file: /var/log/gcode-proxy/gcode.log
