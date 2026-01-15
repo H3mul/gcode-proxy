@@ -9,7 +9,8 @@ import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
-
+from serial_asyncio import open_serial_connection
+        
 from .handlers import (
     GCodeHandler,
     ResponseHandler,
@@ -274,14 +275,6 @@ class GCodeSerialDevice(GCodeDevice):
     capabilities using pyserial and serial_asyncio.
     """
     
-    # Import serial modules at class level to avoid requiring them for base class
-    try:
-        import serial as _serial_module
-        from serial_asyncio import open_serial_connection as _open_serial_connection
-    except ImportError:
-        _serial_module = None  # type: ignore[assignment]
-        _open_serial_connection = None  # type: ignore[assignment]
-    
     def __init__(
         self,
         usb_id: str,
@@ -341,33 +334,18 @@ class GCodeSerialDevice(GCodeDevice):
         # Find the serial port for the USB device
         self._serial_port = find_serial_port_by_usb_id(self.usb_id)
         
-        if self._open_serial_connection is None:
-            raise SerialConnectionError(
-                "serial_asyncio module is not available. "
-                "Install it with: pip install pyserial-asyncio"
-            )
+        self._reader, self._writer = await open_serial_connection(
+            url=self._serial_port,
+            baudrate=self.baud_rate,
+        )
+        self._connected = True
+        logger.info(f"Connected to {self._serial_port} at {self.baud_rate} baud")
         
-        try:
-            self._reader, self._writer = await self._open_serial_connection(
-                url=self._serial_port,
-                baudrate=self.baud_rate,
-            )
-            self._connected = True
-            logger.info(f"Connected to {self._serial_port} at {self.baud_rate} baud")
-            
-            # Give the device a moment to initialize
-            await asyncio.sleep(self.initialization_delay)
-            
-            # Flush any startup messages from the device
-            await self._flush_input()
-            
-        except Exception as e:
-            # Catch serial exceptions without importing serial at module level
-            if self._serial_module and isinstance(e, self._serial_module.SerialException):
-                raise SerialConnectionError(
-                    f"Failed to connect to {self._serial_port}: {e}"
-                ) from e
-            raise
+        # Give the device a moment to initialize
+        await asyncio.sleep(self.initialization_delay)
+        
+        # Flush any startup messages from the device
+        await self._flush_input()
     
     async def disconnect(self) -> None:
         """Disconnect from the serial device."""
