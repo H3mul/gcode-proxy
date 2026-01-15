@@ -17,6 +17,7 @@ from src.gcode_proxy.config import (
     ENV_SERVER_ADDRESS,
     ENV_SERVER_PORT,
 )
+from src.gcode_proxy.triggers_config import CustomTriggerConfig, GCodeTriggerConfig
 
 
 class TestServerConfig:
@@ -544,3 +545,145 @@ class TestConfigFilePath:
         finally:
             os.unlink(env_config_path)
             os.unlink(explicit_config_path)
+
+
+class TestConfigWithTriggers:
+    """Tests for loading trigger configurations from config files."""
+
+    def test_load_with_custom_triggers(self):
+        """Test loading configuration with custom triggers."""
+        config_data = {
+            "server": {
+                "port": 9000,
+            },
+            "device": {
+                "usb-id": "1234:5678",
+            },
+            "custom-triggers": [
+                {
+                    "id": "air-assist-on",
+                    "trigger": {"type": "gcode", "match": "M8"},
+                    "command": "script.py on",
+                },
+                {
+                    "id": "air-assist-off",
+                    "trigger": {"type": "gcode", "match": "M9"},
+                    "command": "script.py off",
+                },
+            ],
+        }
+        
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            config_path = f.name
+        
+        try:
+            config = Config.load(config_file=config_path)
+            assert len(config.custom_triggers) == 2
+            assert config.custom_triggers[0].id == "air-assist-on"
+            assert config.custom_triggers[0].trigger.match == "M8"
+            assert config.custom_triggers[0].command == "script.py on"
+            assert config.custom_triggers[1].id == "air-assist-off"
+        finally:
+            os.unlink(config_path)
+
+    def test_load_with_invalid_trigger(self):
+        """Test loading configuration with invalid trigger is skipped."""
+        config_data = {
+            "device": {
+                "usb-id": "1234:5678",
+            },
+            "custom-triggers": [
+                {
+                    "id": "good-trigger",
+                    "trigger": {"type": "gcode", "match": "M8"},
+                    "command": "cmd",
+                },
+                {
+                    "id": "bad-trigger",
+                    "trigger": {"type": "gcode"},  # Missing match
+                    "command": "cmd",
+                },
+            ],
+        }
+        
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            config_path = f.name
+        
+        try:
+            # Invalid trigger should be skipped with warning
+            config = Config.load(config_file=config_path)
+            # Only the good trigger should be loaded
+            assert len(config.custom_triggers) == 1
+            assert config.custom_triggers[0].id == "good-trigger"
+        finally:
+            os.unlink(config_path)
+
+    def test_load_empty_triggers_list(self):
+        """Test loading configuration with empty triggers list."""
+        config_data = {
+            "device": {
+                "usb-id": "1234:5678",
+            },
+            "custom-triggers": [],
+        }
+        
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            config_path = f.name
+        
+        try:
+            config = Config.load(config_file=config_path)
+            assert len(config.custom_triggers) == 0
+        finally:
+            os.unlink(config_path)
+
+    def test_to_dict_with_triggers(self):
+        """Test converting config with triggers to dictionary."""
+        config = Config()
+        config.device.usb_id = "1234:5678"
+        config.custom_triggers = [
+            CustomTriggerConfig(
+                id="test",
+                trigger=GCodeTriggerConfig(type="gcode", match="M8"),
+                command="script.py",
+            ),
+        ]
+        
+        data = config.to_dict()
+        assert "custom_triggers" in data
+        assert len(data["custom_triggers"]) == 1
+        assert data["custom_triggers"][0]["id"] == "test"
+        assert data["custom_triggers"][0]["trigger"]["match"] == "M8"
+
+    def test_save_and_load_with_triggers(self):
+        """Test saving and loading configuration with triggers."""
+        original = Config()
+        original.server.port = 9000
+        original.device.usb_id = "1234:5678"
+        original.custom_triggers = [
+            CustomTriggerConfig(
+                id="trigger1",
+                trigger=GCodeTriggerConfig(type="gcode", match="M8"),
+                command="cmd1.py",
+            ),
+            CustomTriggerConfig(
+                id="trigger2",
+                trigger=GCodeTriggerConfig(type="gcode", match="M9"),
+                command="cmd2.py",
+            ),
+        ]
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            original.save(config_path)
+            
+            loaded = Config.load(config_file=config_path)
+            
+            assert loaded.server.port == 9000
+            assert loaded.device.usb_id == "1234:5678"
+            assert len(loaded.custom_triggers) == 2
+            assert loaded.custom_triggers[0].id == "trigger1"
+            assert loaded.custom_triggers[0].trigger.match == "M8"
+            assert loaded.custom_triggers[1].id == "trigger2"

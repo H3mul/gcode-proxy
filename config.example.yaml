@@ -29,10 +29,19 @@ device:
   # Environment variable: DEVICE_USB_ID
   usb-id: 303a:4001
   
+  # Device path as alternative to usb-id, overrides usb-id
+  # Environment variable: DEVICE_DEV_PATH
+  #path: /dev/ttyACM0
+  
   # Serial baud rate for the USB device
   # Common values: 9600, 19200, 38400, 57600, 115200, 250000
   # Environment variable: DEVICE_BAUD_RATE
   baud-rate: 115200
+  
+  # Device initialization delay in seconds
+  # Some devices need time to initialize after connection
+  # Environment variable: DEVICE_SERIAL_DELAY
+  serial-delay: 0.1
 
 # GCode communication log file
 # Optional path to a file where all GCode commands sent to the device
@@ -41,3 +50,22 @@ device:
 # If the file exists, new entries are appended to the end.
 # Environment variable: GCODE_LOG_FILE
 # gcode-log-file: /var/log/gcode-proxy/gcode.log
+
+# Custom triggers for executing external commands in response to GCode patterns
+# Triggers allow you to integrate external systems (scripts, Home Assistant, etc.)
+# All trigger execution is asynchronous and non-blocking
+# See TRIGGERS.md for detailed documentation
+custom-triggers:
+  # Example: Air assist on (M8 command)
+  - id: air-assist-on
+    trigger:
+      type: gcode
+      match: M8
+    command: "hostname"
+  
+  # Example: Air assist off (M9 command)
+  - id: air-assist-off
+    trigger:
+      type: gcode
+      match: M9
+    command: "./scripts/air_assist.py --state off"

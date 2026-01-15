@@ -14,6 +14,8 @@ from typing import Any
 
 import yaml
 
+from .triggers_config import CustomTriggerConfig
+
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "gcode-proxy" / "config.yaml"
 
@@ -54,6 +56,7 @@ class Config:
     server: ServerConfig = field(default_factory=ServerConfig)
     device: DeviceConfig = field(default_factory=DeviceConfig)
     gcode_log_file: str | None = None
+    custom_triggers: list[CustomTriggerConfig] = field(default_factory=list)
     
     @classmethod
     def load(
@@ -162,6 +165,17 @@ class Config:
             config.gcode_log_file = str(data["gcode-log-file"])
         elif "gcode_log_file" in data:
             config.gcode_log_file = str(data["gcode_log_file"])
+        
+        # Parse custom triggers
+        if "custom-triggers" in data:
+            triggers_data = data["custom-triggers"]
+            if isinstance(triggers_data, list):
+                for trigger_data in triggers_data:
+                    try:
+                        trigger_config = CustomTriggerConfig.from_dict(trigger_data)
+                        config.custom_triggers.append(trigger_config)
+                    except ValueError as e:
+                        print(f"Warning: Skipping invalid trigger in config file: {e}")
         
         return config
     
@@ -274,6 +288,15 @@ class Config:
         }
         if self.gcode_log_file is not None:
             result["gcode_log_file"] = self.gcode_log_file
+        if self.custom_triggers:
+            result["custom_triggers"] = [
+                {
+                    "id": t.id,
+                    "trigger": {"type": t.trigger.type, "match": t.trigger.match},
+                    "command": t.command,
+                }
+                for t in self.custom_triggers
+            ]
         return result
     
     def save(self, path: Path | str | None = None) -> None:
@@ -312,6 +335,16 @@ class Config:
         
         if self.gcode_log_file is not None:
             data["gcode-log-file"] = self.gcode_log_file
+        
+        if self.custom_triggers:
+            data["custom-triggers"] = [
+                {
+                    "id": t.id,
+                    "trigger": {"type": t.trigger.type, "match": t.trigger.match},
+                    "command": t.command,
+                }
+                for t in self.custom_triggers
+            ]
         
         with open(save_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f, default_flow_style=False)

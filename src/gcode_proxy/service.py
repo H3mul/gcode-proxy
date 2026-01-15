@@ -10,6 +10,7 @@ import logging
 from .device import GCodeDevice, GCodeSerialDevice
 from .handlers import GCodeHandler, ResponseHandler
 from .server import GCodeServer
+from .trigger_manager import TriggerManager
 
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class GCodeProxyService:
         device: GCodeDevice,
         address: str = "0.0.0.0",
         port: int = 8080,
+        trigger_manager: TriggerManager | None = None,
     ):
         """
         Initialize the proxy service with an existing device.
@@ -36,8 +38,10 @@ class GCodeProxyService:
             device: The GCodeDevice instance to use for communication.
             address: Address to bind the server to.
             port: Port to listen on.
+            trigger_manager: Optional TriggerManager for handling GCode triggers.
         """
         self.device = device
+        self.trigger_manager = trigger_manager
         self.server = GCodeServer(
             device=self.device,
             address=address,
@@ -152,6 +156,10 @@ class GCodeProxyService:
         """Stop the service."""
         await self.server.stop()
         await self.device.disconnect()
+        
+        # Wait for any pending trigger tasks
+        if self.trigger_manager:
+            await self.trigger_manager.shutdown()
     
     async def __aenter__(self) -> "GCodeProxyService":
         """Async context manager entry."""

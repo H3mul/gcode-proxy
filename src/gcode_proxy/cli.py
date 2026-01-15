@@ -30,6 +30,7 @@ from .config import (
     Config,
 )
 from .service import GCodeProxyService
+from .trigger_manager import TriggerManager
 
 
 def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
@@ -235,12 +236,24 @@ def main(
     logger.info(f"  Server: {config.server.address}:{config.server.port}")
     if config.gcode_log_file:
         logger.info(f"  GCode log file: {config.gcode_log_file}")
+    if config.custom_triggers:
+        logger.info(f"  Custom triggers: {len(config.custom_triggers)} configured")
+    
+    # Create trigger manager if triggers are configured
+    trigger_manager = None
+    if config.custom_triggers:
+        try:
+            trigger_manager = TriggerManager(config.custom_triggers)
+        except ValueError as e:
+            logger.error(f"Failed to load triggers: {e}")
+            sys.exit(1)
     
     # Create the service based on mode
     if dry_run:
         service = GCodeProxyService.create_dry_run(
             address=config.server.address,
             port=config.server.port,
+            gcode_handler=trigger_manager,
             gcode_log_file=config.gcode_log_file,
         )
     else:
@@ -253,8 +266,10 @@ def main(
             serial_delay=config.device.serial_delay,
             address=config.server.address,
             port=config.server.port,
+            gcode_handler=trigger_manager,
             gcode_log_file=config.gcode_log_file,
         )
+        service.trigger_manager = trigger_manager
     
     # Set up signal handlers for graceful shutdown
     class ExitSignal(Exception):  # noqa: N818
