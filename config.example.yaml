@@ -49,7 +49,7 @@ device:
 # Log entries include timestamp and source (client address or 'device').
 # If the file exists, new entries are appended to the end.
 # Environment variable: GCODE_LOG_FILE
-# gcode-log-file: /var/log/gcode-proxy/gcode.log
+gcode-log-file: gcode.log
 
 # Custom triggers for executing external commands in response to GCode patterns
 # Triggers allow you to integrate external systems (scripts, Home Assistant, etc.)
