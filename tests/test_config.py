@@ -12,6 +12,7 @@ from src.gcode_proxy.config import (
     ServerConfig,
     ENV_CONFIG_FILE,
     ENV_DEVICE_BAUD_RATE,
+    ENV_DEVICE_DEV_PATH,
     ENV_DEVICE_USB_ID,
     ENV_SERVER_ADDRESS,
     ENV_SERVER_PORT,
@@ -49,6 +50,12 @@ class TestDeviceConfig:
         assert config.usb_id == "1234:5678"
         assert config.baud_rate == 9600
 
+    def test_device_path(self):
+        """Test that DeviceConfig accepts device path."""
+        config = DeviceConfig(path="/dev/ttyACM0")
+        assert config.path == "/dev/ttyACM0"
+        assert config.usb_id is None
+
 
 class TestConfig:
     """Tests for Config class."""
@@ -74,6 +81,26 @@ class TestConfig:
             },
             "device": {
                 "usb_id": "303a:4001",
+                "path": None,
+                "baud_rate": 115200,
+                "serial_delay": 0.1,
+            },
+        }
+
+    def test_to_dict_with_device_path(self):
+        """Test converting Config to dictionary with device path."""
+        config = Config()
+        config.device.path = "/dev/ttyACM0"
+        data = config.to_dict()
+        
+        assert data == {
+            "server": {
+                "port": 8080,
+                "address": "0.0.0.0",
+            },
+            "device": {
+                "usb_id": None,
+                "path": "/dev/ttyACM0",
                 "baud_rate": 115200,
                 "serial_delay": 0.1,
             },
@@ -109,6 +136,31 @@ class TestConfigLoadFromFile:
         finally:
             os.unlink(config_path)
 
+    def test_load_from_yaml_with_device_path(self):
+        """Test loading configuration from YAML with device path."""
+        config_data = {
+            "server": {
+                "port": 9000,
+            },
+            "device": {
+                "path": "/dev/ttyACM0",
+                "baud-rate": 9600,
+            },
+        }
+        
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            config_path = f.name
+        
+        try:
+            config = Config.load(config_file=config_path)
+            assert config.server.port == 9000
+            assert config.device.path == "/dev/ttyACM0"
+            assert config.device.baud_rate == 9600
+            assert config.device.usb_id is None
+        finally:
+            os.unlink(config_path)
+
     def test_load_from_yaml_with_underscore_keys(self):
         """Test loading configuration with underscore-style keys."""
         config_data = {
@@ -133,10 +185,32 @@ class TestConfigLoadFromFile:
         finally:
             os.unlink(config_path)
 
+    def test_load_from_yaml_with_device_path_underscore(self):
+        """Test loading configuration with underscore-style device path."""
+        config_data = {
+            "device": {
+                "path": "/dev/ttyUSB0",
+            },
+        }
+        
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            config_path = f.name
+        
+        try:
+            config = Config.load(config_file=config_path)
+            assert config.device.path == "/dev/ttyUSB0"
+            assert config.device.usb_id is None
+        finally:
+            os.unlink(config_path)
+
     def test_load_from_nonexistent_file_uses_defaults(self):
         """Test that loading from a nonexistent file uses defaults."""
         # Use skip_device_validation since no usb_id is provided
-        config = Config.load(config_file="/nonexistent/path/config.yaml", skip_device_validation=True)
+        config = Config.load(
+            config_file="/nonexistent/path/config.yaml",
+            skip_device_validation=True,
+        )
         assert config.server.port == 8080
         assert config.server.address == "0.0.0.0"
         assert config.device.usb_id is None  # No default USB ID
@@ -183,6 +257,20 @@ class TestConfigLoadFromCliArgs:
         assert config.device.usb_id == "1111:2222"
         assert config.device.baud_rate == 57600
 
+    def test_cli_args_with_device_path(self):
+        """Test that CLI arguments can set device path."""
+        cli_args = {
+            "port": 9000,
+            "dev_path": "/dev/ttyACM0",
+            "baud_rate": 57600,
+        }
+        
+        config = Config.load(cli_args=cli_args)
+        assert config.server.port == 9000
+        assert config.device.path == "/dev/ttyACM0"
+        assert config.device.baud_rate == 57600
+        assert config.device.usb_id is None
+
     def test_cli_args_override_file(self):
         """Test that CLI arguments override file values."""
         config_data = {
@@ -225,6 +313,33 @@ class TestConfigLoadFromCliArgs:
         assert config.server.address == "0.0.0.0"  # Default, not overridden
         assert config.device.usb_id == "1111:2222"  # Overridden
         assert config.device.baud_rate == 115200  # Default, not overridden
+
+    def test_both_device_path_and_usb_id_path_is_used(self):
+        """Test that setting both usb_id and path raises an error."""
+        cli_args = {
+            "usb_id": "1111:2222",
+            "dev_path": "/dev/ttyACM0",
+        }
+        
+        config = Config.load(cli_args=cli_args)
+        assert config.device.usb_id == "1111:2222"
+        assert config.device.path == "/dev/ttyACM0"
+
+    def test_neither_usb_id_nor_path_raises_error(self):
+        """Test that setting neither usb_id nor path raises an error."""
+        import pytest
+        with pytest.raises(ValueError, match="Either USB ID or device path is required"):
+            Config.load(cli_args={})
+
+    def test_device_path_alone_is_valid(self):
+        """Test that device path alone is a valid configuration."""
+        cli_args = {
+            "dev_path": "/dev/ttyACM0",
+        }
+        
+        config = Config.load(cli_args=cli_args)
+        assert config.device.path == "/dev/ttyACM0"
+        assert config.device.usb_id is None
 
 
 class TestConfigLoadFromEnvVars:
@@ -308,6 +423,25 @@ class TestConfigSave:
             assert saved_data["server"]["port"] == 9000
             assert saved_data["device"]["usb-id"] == "1234:5678"
 
+    def test_save_with_device_path(self):
+        """Test that save works with device path."""
+        config = Config()
+        config.server.port = 9000
+        config.device.path = "/dev/ttyACM0"
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "test_config.yaml"
+            config.save(config_path)
+            
+            assert config_path.exists()
+            
+            with open(config_path) as f:
+                saved_data = yaml.safe_load(f)
+            
+            assert saved_data["server"]["port"] == 9000
+            assert saved_data["device"]["path"] == "/dev/ttyACM0"
+            assert "usb-id" not in saved_data["device"]
+
     def test_save_creates_parent_directories(self):
         """Test that save creates parent directories if needed."""
         config = Config()
@@ -324,6 +458,7 @@ class TestConfigSave:
         original.server.port = 9000
         original.server.address = "192.168.1.1"
         original.device.usb_id = "aaaa:bbbb"
+        original.device.path = None  # Explicitly clear path
         original.device.baud_rate = 57600
         
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -335,6 +470,26 @@ class TestConfigSave:
             assert loaded.server.port == original.server.port
             assert loaded.server.address == original.server.address
             assert loaded.device.usb_id == original.device.usb_id
+            assert loaded.device.path is None
+            assert loaded.device.baud_rate == original.device.baud_rate
+
+    def test_roundtrip_with_device_path(self):
+        """Test saving and loading with device path produces the same configuration."""
+        original = Config()
+        original.server.port = 9000
+        original.device.path = "/dev/ttyACM0"
+        original.device.usb_id = None  # Explicitly clear usb_id
+        original.device.baud_rate = 57600
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            original.save(config_path)
+            
+            loaded = Config.load(config_file=config_path)
+            
+            assert loaded.server.port == original.server.port
+            assert loaded.device.path == original.device.path
+            assert loaded.device.usb_id is None
             assert loaded.device.baud_rate == original.device.baud_rate
 
 

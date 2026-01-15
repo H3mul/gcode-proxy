@@ -21,6 +21,7 @@ from .config import (
     DEFAULT_CONFIG_PATH,
     ENV_CONFIG_FILE,
     ENV_DEVICE_BAUD_RATE,
+    ENV_DEVICE_DEV_PATH,
     ENV_DEVICE_SERIAL_DELAY,
     ENV_DEVICE_USB_ID,
     ENV_GCODE_LOG_FILE,
@@ -82,6 +83,16 @@ def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
     help=f"USB device ID in vendor:product format (e.g., 303a:4001). [env: {ENV_DEVICE_USB_ID}]",
 )
 @click.option(
+    "--dev",
+    "dev_path",
+    type=str,
+    default=None,
+    help=(
+        f"Device path (e.g., /dev/ttyACM0). "
+        f"Mutually exclusive with --usb-id. [env: {ENV_DEVICE_DEV_PATH}]"
+    ),
+)
+@click.option(
     "-b", "--baud-rate",
     type=int,
     default=None,
@@ -129,6 +140,7 @@ def main(
     port: int | None,
     address: str | None,
     usb_id: str | None,
+    dev_path: str | None,
     baud_rate: int | None,
     serial_delay: float | None,
     gcode_log_file: Path | None,
@@ -181,6 +193,8 @@ def main(
         cli_args["address"] = address
     if usb_id is not None:
         cli_args["usb_id"] = usb_id
+    if dev_path is not None:
+        cli_args["dev_path"] = dev_path
     if baud_rate is not None:
         cli_args["baud_rate"] = baud_rate
     if serial_delay is not None:
@@ -215,7 +229,8 @@ def main(
     if dry_run:
         logger.info("  Mode: DRY-RUN (no actual hardware communication)")
     else:
-        logger.info(f"  Device: {config.device.usb_id} @ {config.device.baud_rate} baud")
+        device_info = config.device.path if config.device.path else config.device.usb_id
+        logger.info(f"  Device: {device_info} @ {config.device.baud_rate} baud")
         logger.info(f"  Serial delay: {config.device.serial_delay}s")
     logger.info(f"  Server: {config.server.address}:{config.server.port}")
     if config.gcode_log_file:
@@ -229,10 +244,11 @@ def main(
             gcode_log_file=config.gcode_log_file,
         )
     else:
-        # usb_id is guaranteed to be set after validation (when not in dry-run mode)
-        assert config.device.usb_id is not None
+        # Either usb_id or dev_path is guaranteed to be set after validation
+        # (when not in dry-run mode)
         service = GCodeProxyService.create_serial(
             usb_id=config.device.usb_id,
+            dev_path=config.device.path,
             baud_rate=config.device.baud_rate,
             serial_delay=config.device.serial_delay,
             address=config.server.address,

@@ -47,7 +47,8 @@ class GCodeProxyService:
     @classmethod
     def create_serial(
         cls,
-        usb_id: str,
+        usb_id: str | None = None,
+        dev_path: str | None = None,
         baud_rate: int = 115200,
         address: str = "0.0.0.0",
         port: int = 8080,
@@ -63,7 +64,8 @@ class GCodeProxyService:
         with a GCodeSerialDevice for actual hardware communication.
         
         Args:
-            usb_id: USB device ID in vendor:product format.
+            usb_id: USB device ID in vendor:product format (mutually exclusive with dev_path).
+            dev_path: Device path like /dev/ttyACM0 (mutually exclusive with usb_id).
             baud_rate: Serial baud rate for the device.
             address: Address to bind the server to.
             port: Port to listen on.
@@ -77,6 +79,7 @@ class GCodeProxyService:
         """
         device = GCodeSerialDevice(
             usb_id=usb_id,
+            dev_path=dev_path,
             baud_rate=baud_rate,
             initialization_delay=serial_delay,
             gcode_handler=gcode_handler,

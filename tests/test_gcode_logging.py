@@ -49,8 +49,8 @@ async def test_gcode_logging():
             print(f"   {line}")
         
         # Verify log contains the command and response
-        assert "[127.0.0.1:54321]: G28" in log_contents, "Command not logged"
-        assert "[device]: ok" in log_contents, "Response not logged"
+        assert "127.0.0.1:54321: G28" in log_contents, "Command not logged"
+        assert "device: ok" in log_contents, "Response not logged"
         print("   ✓ Command and response logged correctly")
         
         # Disconnect
@@ -74,16 +74,16 @@ async def test_gcode_logging():
             print(f"   {line}")
         
         # Verify appending worked
-        assert "[10.0.0.1:8080]: G1 X10 Y20" in log_contents, "Second command not logged"
-        assert log_contents.count("[device]: ok") == 2, "Second response not logged"
+        assert "10.0.0.1:8080: G1 X10 Y20" in log_contents, "Second command not logged"
+        assert log_contents.count("device: ok") == 2, "Second response not logged"
         print("   ✓ Log appending works correctly")
         
         # Count lines to verify we have correct number of entries
         lines = log_contents.strip().split('\n')
         print(f"\n8. Log statistics:")
         print(f"   Total log entries: {len(lines)}")
-        print(f"   Commands: {sum(1 for line in lines if '[' in line and ']: ' in line and ':' in line.split(']')[0])}")
-        print(f"   Responses: {sum(1 for line in lines if '[device]' in line)}")
+        print(f"   Commands: {sum(1 for line in lines if ' - ' in line and not 'device:' in line)}")
+        print(f"   Responses: {sum(1 for line in lines if 'device:' in line)}")
         
         print("\n" + "=" * 70)
         print("✓ All GCode logging tests passed!")

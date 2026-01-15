@@ -277,7 +277,8 @@ class GCodeSerialDevice(GCodeDevice):
     
     def __init__(
         self,
-        usb_id: str,
+        usb_id: str | None = None,
+        dev_path: str | None = None,
         baud_rate: int = 115200,
         gcode_handler: GCodeHandler | None = None,
         response_handler: ResponseHandler | None = None,
@@ -290,7 +291,8 @@ class GCodeSerialDevice(GCodeDevice):
         Initialize the GCode serial device.
         
         Args:
-            usb_id: USB device ID in vendor:product format.
+            usb_id: USB device ID in vendor:product format (mutually exclusive with dev_path).
+            dev_path: Device path like /dev/ttyACM0 (mutually exclusive with usb_id).
             baud_rate: Serial baud rate for communication.
             gcode_handler: Custom handler for GCode commands.
             response_handler: Custom handler for serial responses.
@@ -298,7 +300,13 @@ class GCodeSerialDevice(GCodeDevice):
             read_buffer_size: Size of the read buffer for serial communication.
             initialization_delay: Delay in seconds to allow device initialization after connection.
             gcode_log_file: Optional path to file for logging GCode communication.
+            
+        Raises:
+            ValueError: If neither usb_id nor dev_path are provided
         """
+        if not usb_id and not dev_path:
+            raise ValueError("Must specify either usb_id or dev_path")
+        
         super().__init__(
             gcode_handler=gcode_handler,
             response_handler=response_handler,
@@ -306,6 +314,7 @@ class GCodeSerialDevice(GCodeDevice):
             gcode_log_file=gcode_log_file,
         )
         self.usb_id = usb_id
+        self.dev_path = dev_path
         self.baud_rate = baud_rate
         self.read_buffer_size = read_buffer_size
         self.initialization_delay = initialization_delay
@@ -324,15 +333,22 @@ class GCodeSerialDevice(GCodeDevice):
         Connect to the USB serial device.
         
         Raises:
-            SerialDeviceNotFoundError: If the device cannot be found.
+            SerialDeviceNotFoundError: If the device cannot be found (when using usb_id).
             SerialConnectionError: If the connection fails.
         """
         if self._connected:
             logger.warning("Already connected to serial device")
             return
         
-        # Find the serial port for the USB device
-        self._serial_port = find_serial_port_by_usb_id(self.usb_id)
+        # Determine the serial port to use
+        if self.dev_path:
+            if self.usb_id:
+                logger.warning("Both usb_id and dev_path are specified; using dev_path")
+            self._serial_port = self.dev_path
+        else:
+            # Find the serial port for the USB device
+            assert self.usb_id is not None
+            self._serial_port = find_serial_port_by_usb_id(self.usb_id)
         
         self._reader, self._writer = await open_serial_connection(
             url=self._serial_port,

@@ -21,6 +21,7 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "gcode-proxy" / "config.yaml"
 ENV_SERVER_PORT = "SERVER_PORT"
 ENV_SERVER_ADDRESS = "SERVER_ADDRESS"
 ENV_DEVICE_USB_ID = "DEVICE_USB_ID"
+ENV_DEVICE_DEV_PATH = "DEVICE_DEV_PATH"
 ENV_DEVICE_BAUD_RATE = "DEVICE_BAUD_RATE"
 ENV_DEVICE_SERIAL_DELAY = "DEVICE_SERIAL_DELAY"
 ENV_GCODE_LOG_FILE = "GCODE_LOG_FILE"
@@ -40,6 +41,7 @@ class DeviceConfig:
     """USB device configuration settings."""
     
     usb_id: str | None = None
+    path: str | None = None
     baud_rate: int = 115200
     serial_delay: float = 0.1
     gcode_log_file: str | None = None
@@ -140,6 +142,8 @@ class Config:
                 config.device.usb_id = str(device_data["usb-id"])
             elif "usb_id" in device_data:
                 config.device.usb_id = str(device_data["usb_id"])
+            if "path" in device_data:
+                config.device.path = str(device_data["path"])
             if "baud-rate" in device_data:
                 config.device.baud_rate = int(device_data["baud-rate"])
             elif "baud_rate" in device_data:
@@ -181,6 +185,9 @@ class Config:
         if cli_args.get("usb_id") is not None:
             config.device.usb_id = str(cli_args["usb_id"])
         
+        if cli_args.get("dev_path") is not None:
+            config.device.path = str(cli_args["dev_path"])
+        
         if cli_args.get("baud_rate") is not None:
             config.device.baud_rate = int(cli_args["baud_rate"])
         
@@ -211,6 +218,9 @@ class Config:
         if ENV_DEVICE_USB_ID in os.environ:
             config.device.usb_id = os.environ[ENV_DEVICE_USB_ID]
         
+        if ENV_DEVICE_DEV_PATH in os.environ:
+            config.device.path = os.environ[ENV_DEVICE_DEV_PATH]
+        
         if ENV_DEVICE_BAUD_RATE in os.environ:
             config.device.baud_rate = int(os.environ[ENV_DEVICE_BAUD_RATE])
         
@@ -226,14 +236,22 @@ class Config:
         """Validate required configuration values.
         
         Raises:
-            ValueError: If required configuration is missing.
+            ValueError: If required configuration is missing or invalid.
         """
-        if self.device.usb_id is None or not self.device.usb_id.strip():
+        usb_id_set = self.device.usb_id is not None and self.device.usb_id.strip()
+        dev_path_set = self.device.path is not None and self.device.path.strip()
+        
+        if not usb_id_set and not dev_path_set:
             raise ValueError(
-                "USB ID is required but not set. Please provide it via:\n"
-                "  - Environment variable: DEVICE_USB_ID\n"
-                "  - CLI argument: --usb-id\n"
-                "  - Config file: device.usb-id"
+                "Either USB ID or device path is required but not set. Please provide one via:\n"
+                "  USB ID:\n"
+                "    - Environment variable: DEVICE_USB_ID\n"
+                "    - CLI argument: --usb-id or -d\n"
+                "    - Config file: device.usb-id\n"
+                "  OR device path:\n"
+                "    - Environment variable: DEVICE_DEV_PATH\n"
+                "    - CLI argument: --dev\n"
+                "    - Config file: device.path"
             )
     
     def to_dict(self) -> dict[str, Any]:
@@ -249,6 +267,7 @@ class Config:
             },
             "device": {
                 "usb_id": self.device.usb_id,
+                "path": self.device.path,
                 "baud_rate": self.device.baud_rate,
                 "serial_delay": self.device.serial_delay,
             },
@@ -270,16 +289,25 @@ class Config:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Convert to YAML-friendly format with hyphenated keys
+        device_data: dict[str, Any] = {
+            "baud-rate": self.device.baud_rate,
+            "serial-delay": self.device.serial_delay,
+        }
+        
+        # Only include usb-id if it's set
+        if self.device.usb_id is not None:
+            device_data["usb-id"] = self.device.usb_id
+        
+        # Only include path if it's set
+        if self.device.path is not None:
+            device_data["path"] = self.device.path
+        
         data: dict[str, Any] = {
             "server": {
                 "port": self.server.port,
                 "address": self.server.address,
             },
-            "device": {
-                "usb-id": self.device.usb_id,
-                "baud-rate": self.device.baud_rate,
-                "serial-delay": self.device.serial_delay,
-            },
+            "device": device_data,
         }
         
         if self.gcode_log_file is not None:
