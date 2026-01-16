@@ -50,9 +50,9 @@ class TriggerManager(GCodeHandler):
                     logger.error(f"Failed to load trigger: {e}")
                     raise
     
-    async def on_gcode_received(
+    async def on_gcode(
         self, gcode: str, client_address: tuple[str, int]
-    ) -> str:
+    ) -> None:
         """
         Called when a GCode command is received from a TCP client.
         
@@ -78,23 +78,6 @@ class TriggerManager(GCodeHandler):
                     self._pending_tasks.discard(t)
                 
                 task.add_done_callback(_task_done_callback)
-        
-        # Always return the gcode unchanged
-        return gcode
-    
-    async def on_gcode_sent(
-        self, gcode: str, client_address: tuple[str, int]
-    ) -> None:
-        """
-        Called after a GCode command has been sent to the serial device.
-        
-        This is a no-op for the trigger manager.
-        
-        Args:
-            gcode: The GCode command that was sent.
-            client_address: Tuple of (host, port) identifying the client.
-        """
-        pass
     
     async def shutdown(self) -> None:
         """

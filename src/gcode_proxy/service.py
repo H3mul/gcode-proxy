@@ -2,7 +2,7 @@
 GCode Proxy Service - High-level service management.
 
 This module provides the GCodeProxyService class that combines the TCP server
-and GCode device for a complete proxy service.
+and GCode device for a complete proxy service, using a task queue for communication.
 """
 
 import logging
@@ -10,6 +10,7 @@ import logging
 from .device import GCodeDevice, GCodeSerialDevice
 from .handlers import GCodeHandler, ResponseHandler
 from .server import GCodeServer
+from .task_queue import TaskQueue, create_task_queue
 from .trigger_manager import TriggerManager
 
 
@@ -21,7 +22,8 @@ class GCodeProxyService:
     High-level service combining the TCP server and GCode device.
     
     This class provides a convenient interface for running the complete
-    proxy service with proper lifecycle management.
+    proxy service with proper lifecycle management. It creates a task queue
+    that serves as the communication bridge between the server and device.
     """
     
     def __init__(
@@ -30,6 +32,7 @@ class GCodeProxyService:
         address: str = "0.0.0.0",
         port: int = 8080,
         trigger_manager: TriggerManager | None = None,
+        task_queue: TaskQueue | None = None,
     ):
         """
         Initialize the proxy service with an existing device.
@@ -39,11 +42,20 @@ class GCodeProxyService:
             address: Address to bind the server to.
             port: Port to listen on.
             trigger_manager: Optional TriggerManager for handling GCode triggers.
+            task_queue: Optional TaskQueue; if not provided, one will be created.
         """
         self.device = device
         self.trigger_manager = trigger_manager
+        
+        # Create the task queue if not provided
+        self.task_queue = task_queue or create_task_queue()
+        
+        # Set the task queue on the device
+        self.device.set_task_queue(self.task_queue)
+        
+        # Create the server with the task queue
         self.server = GCodeServer(
-            device=self.device,
+            task_queue=self.task_queue,
             address=address,
             port=port,
         )
@@ -81,16 +93,20 @@ class GCodeProxyService:
         Returns:
             A configured GCodeProxyService instance.
         """
+        # Create the task queue
+        task_queue = create_task_queue()
+        
         device = GCodeSerialDevice(
             usb_id=usb_id,
             dev_path=dev_path,
             baud_rate=baud_rate,
+            task_queue=task_queue,
             initialization_delay=serial_delay,
             gcode_handler=gcode_handler,
             response_handler=response_handler,
             gcode_log_file=gcode_log_file,
         )
-        return cls(device=device, address=address, port=port)
+        return cls(device=device, address=address, port=port, task_queue=task_queue)
     
     @classmethod
     def create_dry_run(
@@ -117,12 +133,16 @@ class GCodeProxyService:
         Returns:
             A configured GCodeProxyService instance.
         """
+        # Create the task queue
+        task_queue = create_task_queue()
+        
         device = GCodeDevice(
+            task_queue=task_queue,
             gcode_handler=gcode_handler,
             response_handler=response_handler,
             gcode_log_file=gcode_log_file,
         )
-        return cls(device=device, address=address, port=port)
+        return cls(device=device, address=address, port=port, task_queue=task_queue)
     
     async def run(self) -> None:
         """
@@ -132,7 +152,7 @@ class GCodeProxyService:
         Runs until interrupted.
         """
         try:
-            # Connect to the device
+            # Connect to the device (this starts the task processing loop)
             await self.device.connect()
             
             # Start and run the server

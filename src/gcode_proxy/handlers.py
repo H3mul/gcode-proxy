@@ -19,22 +19,7 @@ class GCodeHandler(ABC):
     """
     
     @abstractmethod
-    async def on_gcode_received(self, gcode: str, client_address: tuple[str, int]) -> str:
-        """
-        Called when a GCode command is received from a TCP client.
-        
-        Args:
-            gcode: The raw GCode command string received.
-            client_address: Tuple of (host, port) identifying the client.
-            
-        Returns:
-            The (possibly modified) GCode command to forward to the device.
-            Return the original gcode to pass through unchanged.
-        """
-        pass
-    
-    @abstractmethod
-    async def on_gcode_sent(self, gcode: str, client_address: tuple[str, int]) -> None:
+    async def on_gcode(self, gcode: str, client_address: tuple[str, int]) -> None:
         """
         Called after a GCode command has been sent to the serial device.
         
@@ -54,26 +39,8 @@ class ResponseHandler(ABC):
     """
     
     @abstractmethod
-    async def on_response_received(
-        self, response: str, original_gcode: str, client_address: tuple[str, int]
-    ) -> str:
-        """
-        Called when a response is received from the serial device.
-        
-        Args:
-            response: The raw response string from the device.
-            original_gcode: The GCode command that triggered this response.
-            client_address: Tuple of (host, port) identifying the client.
-            
-        Returns:
-            The (possibly modified) response to send back to the client.
-            Return the original response to pass through unchanged.
-        """
-        pass
-    
-    @abstractmethod
-    async def on_response_sent(
-        self, response: str, client_address: tuple[str, int]
+    async def on_response(
+        self, response: str, gcode: str, client_address: tuple[str, int]
     ) -> None:
         """
         Called after a response has been sent to the TCP client.
@@ -92,11 +59,7 @@ class DefaultGCodeHandler(GCodeHandler):
     This handler simply passes GCode commands through without modification.
     """
     
-    async def on_gcode_received(self, gcode: str, client_address: tuple[str, int]) -> str:
-        """Pass through the GCode command unchanged."""
-        return gcode
-    
-    async def on_gcode_sent(self, gcode: str, client_address: tuple[str, int]) -> None:
+    async def on_gcode(self, gcode: str, client_address: tuple[str, int]) -> None:
         """No-op after sending."""
         pass
 
@@ -108,24 +71,16 @@ class DefaultResponseHandler(ResponseHandler):
     This handler simply passes responses through without modification.
     """
     
-    async def on_response_received(
-        self, response: str, original_gcode: str, client_address: tuple[str, int]
-    ) -> str:
-        """Pass through the response unchanged."""
-        return response
-    
-    async def on_response_sent(
-        self, response: str, client_address: tuple[str, int]
+    async def on_response(
+        self, response: str, gcode: str, client_address: tuple[str, int]
     ) -> None:
         """No-op after sending."""
         pass
 
 
 # Type aliases for callback-based handlers (alternative to class-based)
-GCodeReceivedCallback = Callable[[str, tuple[str, int]], Awaitable[str]]
-GCodeSentCallback = Callable[[str, tuple[str, int]], Awaitable[None]]
-ResponseReceivedCallback = Callable[[str, str, tuple[str, int]], Awaitable[str]]
-ResponseSentCallback = Callable[[str, tuple[str, int]], Awaitable[None]]
+GCodeCallback = Callable[[str, tuple[str, int]], Awaitable[None]]
+ResponseCallback = Callable[[str, str, tuple[str, int]], Awaitable[None]]
 
 
 class CallbackGCodeHandler(GCodeHandler):
@@ -137,8 +92,7 @@ class CallbackGCodeHandler(GCodeHandler):
     
     def __init__(
         self,
-        on_received: GCodeReceivedCallback | None = None,
-        on_sent: GCodeSentCallback | None = None,
+        on_gcode: GCodeCallback | None = None,
     ):
         """
         Initialize with optional callback functions.
@@ -147,17 +101,11 @@ class CallbackGCodeHandler(GCodeHandler):
             on_received: Callback for when GCode is received.
             on_sent: Callback for when GCode is sent.
         """
-        self._on_received = on_received
-        self._on_sent = on_sent
+        self._on_gcode = on_gcode
     
-    async def on_gcode_received(self, gcode: str, client_address: tuple[str, int]) -> str:
-        if self._on_received:
-            return await self._on_received(gcode, client_address)
-        return gcode
-    
-    async def on_gcode_sent(self, gcode: str, client_address: tuple[str, int]) -> None:
-        if self._on_sent:
-            await self._on_sent(gcode, client_address)
+    async def on_gcode(self, gcode: str, client_address: tuple[str, int]) -> None:
+        if self._on_gcode:
+            await self._on_gcode(gcode, client_address)
 
 
 class CallbackResponseHandler(ResponseHandler):
@@ -169,8 +117,7 @@ class CallbackResponseHandler(ResponseHandler):
     
     def __init__(
         self,
-        on_received: ResponseReceivedCallback | None = None,
-        on_sent: ResponseSentCallback | None = None,
+        on_response: ResponseCallback | None = None,
     ):
         """
         Initialize with optional callback functions.
@@ -179,18 +126,10 @@ class CallbackResponseHandler(ResponseHandler):
             on_received: Callback for when a response is received.
             on_sent: Callback for when a response is sent.
         """
-        self._on_received = on_received
-        self._on_sent = on_sent
+        self._on_response = on_response
     
-    async def on_response_received(
-        self, response: str, original_gcode: str, client_address: tuple[str, int]
-    ) -> str:
-        if self._on_received:
-            return await self._on_received(response, original_gcode, client_address)
-        return response
-    
-    async def on_response_sent(
-        self, response: str, client_address: tuple[str, int]
+    async def on_response(
+        self, response: str, gcode: str, client_address: tuple[str, int]
     ) -> None:
-        if self._on_sent:
-            await self._on_sent(response, client_address)
+        if self._on_response:
+            await self._on_response(response, gcode, client_address)

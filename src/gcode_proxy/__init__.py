@@ -7,6 +7,7 @@ from .device import GCodeDevice, GCodeSerialDevice
 from .service import GCodeProxyService
 from .server import GCodeServer
 from .handlers import GCodeHandler, ResponseHandler
+from .task_queue import Task, TaskQueue, create_task_queue
 from .utils import SerialDeviceNotFoundError, SerialConnectionError
 
 __all__ = [
@@ -16,6 +17,9 @@ __all__ = [
     "GCodeServer",
     "GCodeHandler",
     "ResponseHandler",
+    "Task",
+    "TaskQueue",
+    "create_task_queue",
     "SerialDeviceNotFoundError",
     "SerialConnectionError",
     "__version__",

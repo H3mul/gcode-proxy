@@ -2,15 +2,13 @@
 TCP Server for GCode Proxy.
 
 This module provides the async TCP server that accepts client connections
-and forwards GCode commands to the serial device via the GCodeDevice core.
+and forwards GCode commands to the task queue for processing by the device.
 """
 
 import asyncio
 import logging
-# from typing import Callable, Awaitable
 
-from .device import GCodeDevice
-from .utils import SerialConnectionError
+from .task_queue import Task, TaskQueue
 
 
 logger = logging.getLogger(__name__)
@@ -21,26 +19,29 @@ class GCodeServer:
     Async TCP server for receiving GCode commands from clients.
     
     This server accepts TCP connections, reads GCode commands,
-    forwards them to the USB device via GCodeDevice, and returns responses.
+    creates tasks and adds them to the queue for processing by the device.
     """
     
     def __init__(
         self,
-        device: GCodeDevice,
+        task_queue: TaskQueue,
         address: str = "0.0.0.0",
         port: int = 8080,
+        response_timeout: float = 30.0,
     ):
         """
         Initialize the GCode server.
         
         Args:
-            device: The GCodeDevice instance for device communication.
+            task_queue: The TaskQueue for sending commands to the device.
             address: The address to bind the server to.
             port: The port to listen on.
+            response_timeout: Timeout in seconds for waiting for device response.
         """
-        self.device = device
+        self.task_queue = task_queue
         self.address = address
         self.port = port
+        self.response_timeout = response_timeout
         
         self._server: asyncio.Server | None = None
         self._running = False
@@ -156,7 +157,7 @@ class GCodeServer:
         """
         Process GCode commands from a client connection.
         
-        Reads commands from the client, forwards them to the device,
+        Reads commands from the client, creates tasks, adds them to the queue,
         and sends responses back.
         
         Args:
@@ -189,17 +190,36 @@ class GCodeServer:
                 if not commands:
                     continue
                 
-                # Process each command and collect responses
+                # Process each command by creating tasks and queuing them
                 responses: list[str] = []
                 
                 for command in commands:
                     try:
-                        response = await self.device.send_gcode(command, client_address)
+                        # Create a task for this command
+                        task = Task(
+                            command=command,
+                            client_address=client_address,
+                            writer=writer,
+                        )
+                        
+                        # Add task to the queue
+                        await self.task_queue.put(task)
+                        logger.debug(f"Queued command from {client_address}: {command}; " +
+                            f"Queue size: {self.task_queue.qsize()}")
+                        
+                        # Wait for the response
+                        response = await task.wait_for_response(timeout=self.response_timeout)
                         if response:
                             responses.append(response)
-                    except SerialConnectionError as e:
+                            
+                    except asyncio.TimeoutError:
+                        error_msg = "error: timeout waiting for device response"
+                        logger.error(f"Timeout for {client_address}: {command}")
+                        responses.append(error_msg)
+                        break
+                    except Exception as e:
                         error_msg = f"error: {e}"
-                        logger.error(f"Serial error for {client_address}: {e}")
+                        logger.error(f"Error for {client_address}: {e}")
                         responses.append(error_msg)
                         break
                 
@@ -224,6 +244,3 @@ class GCodeServer:
                 except Exception:
                     pass
                 break
-
-
-

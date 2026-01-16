@@ -2,7 +2,8 @@
 """
 Test script for GCode logging functionality.
 
-This script demonstrates and tests the gcode-log-file feature.
+This script demonstrates and tests the gcode-log-file feature
+using the TaskQueue-based architecture.
 """
 
 import asyncio
@@ -14,6 +15,60 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from gcode_proxy.device import GCodeDevice
+from gcode_proxy.task_queue import Task, create_task_queue
+
+
+class MockStreamWriter:
+    """Mock StreamWriter for testing."""
+    
+    def __init__(self):
+        self.written_data = []
+        self._closed = False
+    
+    def write(self, data: bytes) -> None:
+        self.written_data.append(data)
+    
+    async def drain(self) -> None:
+        pass
+    
+    def close(self) -> None:
+        self._closed = True
+    
+    async def wait_closed(self) -> None:
+        pass
+    
+    def get_extra_info(self, name: str):
+        if name == "peername":
+            return ("127.0.0.1", 54321)
+        return None
+
+
+async def send_gcode_via_queue(device: GCodeDevice, gcode: str, client_address: tuple[str, int], timeout: float = 5.0) -> str:
+    """
+    Helper function to send a GCode command through the task queue.
+    
+    Args:
+        device: The GCodeDevice with an attached task queue.
+        gcode: The GCode command to send.
+        client_address: The client address tuple.
+        timeout: Timeout for waiting for response.
+        
+    Returns:
+        The response from the device.
+    """
+    if not device.task_queue:
+        raise RuntimeError("Device has no task queue")
+    
+    writer = MockStreamWriter()
+    task = Task(
+        command=gcode,
+        client_address=client_address,
+        writer=writer,
+    )
+    
+    await device.task_queue.put(task)
+    response = await task.wait_for_response(timeout=timeout)
+    return response
 
 
 async def test_gcode_logging():
@@ -25,17 +80,23 @@ async def test_gcode_logging():
     with tempfile.TemporaryDirectory() as tmpdir:
         log_file = Path(tmpdir) / "gcode.log"
         
+        # Create a task queue
+        task_queue = create_task_queue()
+        
         # Create a device with logging
         print(f"\n1. Creating device with log file: {log_file}")
-        device = GCodeDevice(gcode_log_file=str(log_file))
+        device = GCodeDevice(
+            task_queue=task_queue,
+            gcode_log_file=str(log_file),
+        )
         
-        # Connect the device
+        # Connect the device (this starts the task processing loop)
         print("2. Connecting device...")
         await device.connect()
         
-        # Send a test gcode command
+        # Send a test gcode command via the task queue
         print("3. Sending GCode command: G28 from 127.0.0.1:54321")
-        response = await device.send_gcode("G28", client_address=("127.0.0.1", 54321))
+        response = await send_gcode_via_queue(device, "G28", ("127.0.0.1", 54321))
         print(f"   Response: {response}")
         
         # Check that the log file was created
@@ -58,11 +119,15 @@ async def test_gcode_logging():
         
         # Test appending with a second device instance
         print("\n5. Testing log file appending...")
-        device2 = GCodeDevice(gcode_log_file=str(log_file))
+        task_queue2 = create_task_queue()
+        device2 = GCodeDevice(
+            task_queue=task_queue2,
+            gcode_log_file=str(log_file),
+        )
         await device2.connect()
         
         print("6. Sending GCode command: G1 X10 Y20 from 10.0.0.1:8080")
-        response2 = await device2.send_gcode("G1 X10 Y20", client_address=("10.0.0.1", 8080))
+        response2 = await send_gcode_via_queue(device2, "G1 X10 Y20", ("10.0.0.1", 8080))
         print(f"   Response: {response2}")
         
         await device2.disconnect()
