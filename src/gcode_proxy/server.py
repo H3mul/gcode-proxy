@@ -148,6 +148,29 @@ class GCodeServer:
             
             logger.info(f"Client disconnected: {client_address}")
     
+    async def _send_response_when_ready(self, task: Task, timeout: float) -> None:
+        """
+        Wait for a task's response and send it back to the client.
+        
+        This method is scheduled asynchronously to allow the server to continue
+        accepting and queuing new commands without blocking on device responses.
+        
+        Args:
+            task: The Task object to wait for.
+            timeout: Timeout in seconds for waiting for the response.
+        """
+        try:
+            response = await task.wait_for_response(timeout=timeout)
+            await task.send_response_to_client(response)
+        except asyncio.TimeoutError:
+            error_msg = "error: timeout waiting for device response"
+            logger.error(f"Timeout for {task.client_address}: {task.command}")
+            await task.send_response_to_client(error_msg)
+        except Exception as e:
+            error_msg = f"error: {e}"
+            logger.error(f"Error sending response for {task.client_address}: {e}")
+            await task.send_response_to_client(error_msg)
+    
     async def _process_client_commands(
         self,
         reader: asyncio.StreamReader,
@@ -158,7 +181,8 @@ class GCodeServer:
         Process GCode commands from a client connection.
         
         Reads commands from the client, creates tasks, adds them to the queue,
-        and sends responses back.
+        and schedules response sending asynchronously. This allows new commands
+        to be queued and logged immediately without blocking on device responses.
         
         Args:
             reader: The stream reader for the client connection.
@@ -191,8 +215,6 @@ class GCodeServer:
                     continue
                 
                 # Process each command by creating tasks and queuing them
-                responses: list[str] = []
-                
                 for command in commands:
                     try:
                         # Create a task for this command
@@ -207,27 +229,21 @@ class GCodeServer:
                         logger.debug(f"Queued command from {client_address}: {command}; " +
                             f"Queue size: {self.task_queue.qsize()}")
                         
-                        # Wait for the response
-                        response = await task.wait_for_response(timeout=self.response_timeout)
-                        if response:
-                            responses.append(response)
+                        # Schedule response sending asynchronously without awaiting
+                        # This allows the server to immediately process new incoming commands
+                        asyncio.create_task(
+                            self._send_response_when_ready(task, self.response_timeout)
+                        )
                             
-                    except asyncio.TimeoutError:
-                        error_msg = "error: timeout waiting for device response"
-                        logger.error(f"Timeout for {client_address}: {command}")
-                        responses.append(error_msg)
-                        break
                     except Exception as e:
                         error_msg = f"error: {e}"
-                        logger.error(f"Error for {client_address}: {e}")
-                        responses.append(error_msg)
-                        break
-                
-                # Send all responses back to the client
-                if responses:
-                    response_data = "\n".join(responses) + "\n"
-                    writer.write(response_data.encode("utf-8"))
-                    await writer.drain()
+                        logger.error(f"Error queuing command from {client_address}: {e}")
+                        try:
+                            error_response = f"{error_msg}\n"
+                            writer.write(error_response.encode("utf-8"))
+                            await writer.drain()
+                        except Exception:
+                            pass
                     
             except asyncio.TimeoutError:
                 logger.debug(f"Client {client_address} idle timeout")
