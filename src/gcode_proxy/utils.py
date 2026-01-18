@@ -92,11 +92,14 @@ def clean_grbl_response(raw_line: str) -> str:
         "ok"
     """
     # The regex focuses on the end of the string
-    pattern = r"^.*?(ok|error:\d+|ALARM:\d+|<[^>]+>|\[MSG:[^\]]+\]|Grbl\s\d+\.\d+.*)$"
+    pattern = r"^.*?(\d+\.\d+|\$.*|ok|error:\d+|ALARM:\d+|<[^>]+>|\[MSG:[^\]]+\]|Grbl\s\d+\.\d+.*)$"
     match = re.search(pattern, raw_line.strip())
     
     cleaned = ""
     if match:
         cleaned = match.group(1) # Return only the GRBL part
+
+    if cleaned.strip() != raw_line.strip():
+        logger.debug(f"Original line before cleaning: {raw_line.strip()}")
 
     return cleaned.strip()

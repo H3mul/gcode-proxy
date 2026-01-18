@@ -80,4 +80,16 @@ custom-triggers:
     trigger:
       type: gcode
       match: M9
-      command: "hass-cli service call homeassistant.turn_off --arguments entity_id=switch.laser_air_assist"
+    command: "hass-cli service call homeassistant.turn_off --arguments entity_id=switch.laser_air_assist"
+    
+  - id: air-vent-on
+    trigger:
+      type: gcode
+      match: M7
+    command: "hass-cli service call homeassistant.turn_on --arguments entity_id=fan.laser_vent"
+
+  - id: air-vent-off
+    trigger:
+      type: gcode
+      match: (M7\.1)|(M9)
+    command: "hass-cli service call homeassistant.turn_off --arguments entity_id=fan.laser_vent"

@@ -354,7 +354,6 @@ class GCodeSerialProtocol(asyncio.Protocol):
             if self.normalize_grbl_responses:
                 line = clean_grbl_response(line)
     
-            logger.debug(f"Cleaned line: {line}")
             decoded_line = line.strip()
 
             if not decoded_line:
