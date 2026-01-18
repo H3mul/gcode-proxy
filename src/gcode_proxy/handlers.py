@@ -8,6 +8,7 @@ external scripts or perform custom actions based on the data.
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Awaitable
+from typing import Any
 
 
 class GCodeHandler(ABC):
@@ -19,13 +20,24 @@ class GCodeHandler(ABC):
     """
     
     @abstractmethod
-    async def on_gcode(self, gcode: str, client_address: tuple[str, int]) -> None:
+    async def on_gcode(
+        self, gcode: str, client_address: tuple[str, int]
+    ) -> dict[str, Any] | None:
         """
-        Called after a GCode command has been sent to the serial device.
+        Called when a GCode command is received before being sent to the device.
         
         Args:
-            gcode: The GCode command that was sent.
+            gcode: The GCode command that was received.
             client_address: Tuple of (host, port) identifying the client.
+            
+        Returns:
+            Optional dictionary with behavior metadata:
+            - 'triggered': bool - Whether a trigger matched
+            - 'should_forward': bool - Whether to send GCode to device
+            - 'fake_response': str | None - Response for CAPTURE modes
+            - 'behavior': TriggerBehavior | None - The behavior mode used
+            
+            Returns None if no special handling is needed (default behavior).
         """
         pass
 
@@ -59,9 +71,11 @@ class DefaultGCodeHandler(GCodeHandler):
     This handler simply passes GCode commands through without modification.
     """
     
-    async def on_gcode(self, gcode: str, client_address: tuple[str, int]) -> None:
-        """No-op after sending."""
-        pass
+    async def on_gcode(
+        self, gcode: str, client_address: tuple[str, int]
+    ) -> dict[str, Any] | None:
+        """No-op, return None for default behavior."""
+        return None
 
 
 class DefaultResponseHandler(ResponseHandler):
@@ -79,7 +93,7 @@ class DefaultResponseHandler(ResponseHandler):
 
 
 # Type aliases for callback-based handlers (alternative to class-based)
-GCodeCallback = Callable[[str, tuple[str, int]], Awaitable[None]]
+GCodeCallback = Callable[[str, tuple[str, int]], Awaitable[dict[str, Any] | None]]
 ResponseCallback = Callable[[str, str, tuple[str, int]], Awaitable[None]]
 
 
@@ -103,9 +117,12 @@ class CallbackGCodeHandler(GCodeHandler):
         """
         self._on_gcode = on_gcode
     
-    async def on_gcode(self, gcode: str, client_address: tuple[str, int]) -> None:
+    async def on_gcode(
+        self, gcode: str, client_address: tuple[str, int]
+    ) -> dict[str, Any] | None:
         if self._on_gcode:
-            await self._on_gcode(gcode, client_address)
+            return await self._on_gcode(gcode, client_address)
+        return None
 
 
 class CallbackResponseHandler(ResponseHandler):

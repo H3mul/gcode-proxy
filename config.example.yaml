@@ -73,6 +73,11 @@ gcode-log-file: gcode.log
 # All trigger execution is asynchronous and non-blocking
 # See TRIGGERS.md for detailed documentation
 custom-triggers:
+  # Trigger behavior modes:
+  #   forward (default): Send gcode to device, execute trigger async, return device response
+  #   capture: Don't send gcode to device, execute trigger, return fake response (ok or error)
+  #   capture-nowait: Don't send gcode to device, execute trigger async, return ok immediately
+  
   # Example: Air assist on (M8 command)
   - id: air-assist-on
     trigger:
@@ -85,14 +90,17 @@ custom-triggers:
     trigger:
       type: gcode
       match: M9
+      behavior: capture-nowait
     command: "hass-cli service call homeassistant.turn_off --arguments entity_id=switch.laser_air_assist"
     
+  # Example: Air vent on (M7 command)
   - id: air-vent-on
     trigger:
       type: gcode
       match: M7
     command: "hass-cli service call homeassistant.turn_on --arguments entity_id=fan.laser_vent"
 
+  # Example: Air vent off (M7.1 or M9 command)
   - id: air-vent-off
     trigger:
       type: gcode

@@ -178,6 +178,13 @@ class GCodeDevice:
         """
         Process a single task.
 
+        Calls the GCode handler and waits for it to complete. The handler may
+        match triggers and decide whether the GCode should be forwarded to the
+        device or intercepted. Supports three trigger behaviors:
+        - forward: Send GCode to device, execute trigger async, return device response
+        - capture: Don't send GCode to device, execute trigger, return fake response
+        - capture-nowait: Don't send GCode to device, execute trigger async, return immediately
+
         Args:
             task: The task to process.
         """
@@ -188,40 +195,52 @@ class GCodeDevice:
             gcode += "\n"
 
         try:
-            await self._send(gcode)
-
-            # Immediately listen for response, in case we miss it
-            receive_task = asyncio.create_task(self._receive())
-
-            # Notify handler that command was sent
-            self.run_noncritical_task(self.gcode_handler.on_gcode(gcode, client_address))
-
-            logger.debug(f"Sent: {gcode.strip()}")
+            # Call the GCode handler and wait for it to complete
+            # For triggers, this executes the trigger and returns behavior metadata
+            handler_result = await self.gcode_handler.on_gcode(gcode, client_address)
 
             # Log the GCode command
             source_address = f"{client_address[0]}:{client_address[1]}"
-            self.run_noncritical_task(self._log_gcode(task.command, source_address))
+            await self._log_gcode(task.command, source_address)
 
-            response = await receive_task
+            # Determine whether to send GCode to device based on trigger behavior
+            should_forward = True
+            fake_response = None
 
-            logger.debug(f"Received: {response.strip()}")
+            if handler_result and isinstance(handler_result, dict):
+                should_forward = handler_result.get('should_forward', True)
+                fake_response = handler_result.get('fake_response')
+
+            if not should_forward:
+                # Trigger captured the command, don't send to device
+                response = fake_response or 'ok'
+                logger.debug(f"Trigger captured command, returning: {response}")
+            else:
+                # Send to device and wait for response
+                await self._send(gcode)
+
+                # Immediately listen for response, in case we miss it
+                receive_task = asyncio.create_task(self._receive())
+
+                logger.debug(f"Sent: {gcode.strip()}")
+
+                response = await receive_task
+
+                logger.debug(f"Received: {response.strip()}")
 
             # Set the response on the task
             task.set_response(response)
 
             # Log the response
-            self.run_noncritical_task(self._log_gcode(response, "device"))
+            await self._log_gcode(response, "device")
 
-            # Notify response handler
-            self.run_noncritical_task(
-                self.response_handler.on_response(response, gcode, client_address)
-            )
+            # Notify response handler and wait for it to complete
+            await self.response_handler.on_response(response, gcode, client_address)
 
         except asyncio.TimeoutError:
             logger.warning(f"Timeout waiting for response to: {gcode.strip()}")
             message = "server-error: timed out waiting for server response"
-            self.run_noncritical_task(
-                self._log_gcode(message, "device"))
+            await self._log_gcode(message, "device")
             task.set_response(message)
         except Exception as e:
             logger.error(f"Error sending GCode: {e}")

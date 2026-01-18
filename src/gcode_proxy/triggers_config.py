@@ -5,7 +5,38 @@ that allow matching GCode commands and executing external commands in response.
 """
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
+
+
+class TriggerBehavior(Enum):
+    """Behavior modes for trigger execution.
+    
+    - FORWARD: Execute trigger async, send gcode to device, return device response.
+    - CAPTURE: Execute trigger sync, don't send gcode to device, return fake response.
+    - CAPTURE_NOWAIT: Execute trigger async, don't send gcode to device, return
+      immediately.
+    """
+    FORWARD = "forward"
+    CAPTURE = "capture"
+    CAPTURE_NOWAIT = "capture-nowait"
+    
+    @classmethod
+    def from_string(cls, value: str) -> "TriggerBehavior":
+        """Create a TriggerBehavior from a string, defaulting to CAPTURE.
+        
+        Args:
+            value: String representation of the behavior.
+            
+        Returns:
+            TriggerBehavior enum value.
+        """
+        value_lower = value.lower().strip() if value else ""
+        for member in cls:
+            if member.value == value_lower:
+                return member
+        # Default to CAPTURE if not recognized
+        return cls.CAPTURE
 
 
 @dataclass
@@ -17,13 +48,14 @@ class GCodeTriggerConfig:
     
     type: str
     match: str
+    behavior: TriggerBehavior = TriggerBehavior.CAPTURE
     
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GCodeTriggerConfig":
         """Create a GCodeTriggerConfig from a dictionary.
         
         Args:
-            data: Dictionary containing 'type' and 'match' keys.
+            data: Dictionary containing 'type', 'match', and optional 'behavior' keys.
             
         Returns:
             GCodeTriggerConfig instance.
@@ -36,6 +68,7 @@ class GCodeTriggerConfig:
         
         trigger_type = data.get("type", "").strip()
         match_pattern = data.get("match", "").strip()
+        behavior_str = data.get("behavior", "capture")
         
         if not trigger_type:
             raise ValueError("Trigger 'type' is required")
@@ -45,7 +78,9 @@ class GCodeTriggerConfig:
         if trigger_type != "gcode":
             raise ValueError(f"Unsupported trigger type: {trigger_type}")
         
-        return cls(type=trigger_type, match=match_pattern)
+        behavior = TriggerBehavior.from_string(behavior_str)
+        
+        return cls(type=trigger_type, match=match_pattern, behavior=behavior)
 
 
 @dataclass

@@ -36,6 +36,7 @@ class Trigger:
         self.config = config
         self.id = config.id
         self.command = config.command
+        self.behavior = config.trigger.behavior
         
         # Compile the regex pattern for matching GCode
         try:
@@ -60,15 +61,16 @@ class Trigger:
         gcode_stripped = gcode.strip()
         return bool(self.pattern.search(gcode_stripped))
     
-    async def execute(self) -> bool:
+    async def execute(self) -> tuple[bool, str | None]:
         """
         Execute the trigger's command asynchronously.
         
         The command is executed as a subprocess without blocking.
         
         Returns:
-            True if the command executed successfully (exit code 0),
-            False otherwise.
+            Tuple of (success: bool, error_message: str | None).
+            If successful, error_message is None.
+            If failed, error_message contains the stderr output.
         """
         try:
             logger.info(f"Executing trigger '{self.id}': {self.command}")
@@ -85,19 +87,19 @@ class Trigger:
             
             # Check the return code
             if process.returncode == 0:
-                logger.info(
+                logger.debug(
                     f"Trigger '{self.id}' executed successfully "
                     f"(exit code: {process.returncode})"
                 )
-                return True
+                return True, None
             else:
                 stderr_str = stderr.decode('utf-8', errors='replace').strip()
                 logger.error(
                     f"Trigger '{self.id}' failed with exit code {process.returncode}: "
                     f"{stderr_str}"
                 )
-                return False
+                return False, stderr_str
                 
         except Exception as e:
             logger.error(f"Trigger '{self.id}' execution error: {e}")
-            return False
+            return False, str(e)
