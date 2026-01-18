@@ -23,7 +23,7 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "gcode-proxy" / "config.yaml"
 ENV_SERVER_PORT = "SERVER_PORT"
 ENV_SERVER_ADDRESS = "SERVER_ADDRESS"
 ENV_SERVER_QUEUE_LIMIT = "SERVER_QUEUE_LIMIT"
-ENV_SERVER_NORMALIZE_RESPONSE_TERMINATORS = "SERVER_NORMALIZE_RESPONSE_TERMINATORS"
+ENV_DEVICE_NORMALIZE_GRBL_RESPONSES = "DEVICE_NORMALIZE_GRBL_RESPONSES"
 ENV_DEVICE_USB_ID = "DEVICE_USB_ID"
 ENV_DEVICE_DEV_PATH = "DEVICE_DEV_PATH"
 ENV_DEVICE_BAUD_RATE = "DEVICE_BAUD_RATE"
@@ -50,7 +50,7 @@ class DeviceConfig:
     baud_rate: int = 115200
     serial_delay: float = 0.1
     gcode_log_file: str | None = None
-    normalize_response_terminators: bool = True
+    normalize_grbl_responses: bool = True
 
 
 @dataclass
@@ -165,16 +165,17 @@ class Config:
                 config.device.serial_delay = float(device_data["serial_delay"])
             if "gcode-log-file" in device_data:
                 config.device.gcode_log_file = str(device_data["gcode-log-file"])
-            if "gcode_log_file" in device_data:
+            elif "gcode_log_file" in device_data:
                 config.device.gcode_log_file = str(device_data["gcode_log_file"])
-            if "normalize-response-terminators" in device_data:
-                config.device.normalize_response_terminators = bool(
-                    device_data["normalize-response-terminators"]
+            if "normalize-grbl-responses" in device_data:
+                config.device.normalize_grbl_responses = bool(
+                    device_data["normalize-grbl-responses"]
                 )
-            elif "normalize_response_terminators" in device_data:
-                config.device.normalize_response_terminators = bool(
-                    device_data["normalize_response_terminators"]
+            elif "normalize_grbl_responses" in device_data:
+                config.device.normalize_grbl_responses = bool(
+                    device_data["normalize_grbl_responses"]
                 )
+
         
         # Parse gcode-log-file at root level
         if "gcode-log-file" in data:
@@ -215,9 +216,9 @@ class Config:
         if cli_args.get("queue_limit") is not None:
             config.server.queue_limit = int(cli_args["queue_limit"])
         
-        if cli_args.get("normalize_response_terminators") is not None:
-            config.device.normalize_response_terminators = bool(
-                cli_args["normalize_response_terminators"]
+        if cli_args.get("normalize_grbl_responses") is not None:
+            config.device.normalize_grbl_responses = bool(
+                cli_args["normalize_grbl_responses"]
             )
         
         if cli_args.get("usb_id") is not None:
@@ -256,9 +257,9 @@ class Config:
         if ENV_SERVER_QUEUE_LIMIT in os.environ:
             config.server.queue_limit = int(os.environ[ENV_SERVER_QUEUE_LIMIT])
         
-        if ENV_SERVER_NORMALIZE_RESPONSE_TERMINATORS in os.environ:
-            env_value = os.environ[ENV_SERVER_NORMALIZE_RESPONSE_TERMINATORS].lower()
-            config.device.normalize_response_terminators = env_value in (
+        if ENV_DEVICE_NORMALIZE_GRBL_RESPONSES in os.environ:
+            env_value = os.environ[ENV_DEVICE_NORMALIZE_GRBL_RESPONSES].lower()
+            config.device.normalize_grbl_responses = env_value in (
                 "1",
                 "true",
                 "yes",
@@ -351,6 +352,7 @@ class Config:
         device_data: dict[str, Any] = {
             "baud-rate": self.device.baud_rate,
             "serial-delay": self.device.serial_delay,
+            "normalize-grbl-responses": self.device.normalize_grbl_responses,
         }
         
         # Only include usb-id if it's set
@@ -366,7 +368,6 @@ class Config:
                 "port": self.server.port,
                 "address": self.server.address,
                 "queue-limit": self.server.queue_limit,
-                "normalize-response-terminators": self.device.normalize_response_terminators,
             },
             "device": device_data,
         }

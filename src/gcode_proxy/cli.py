@@ -28,7 +28,7 @@ from .config import (
     ENV_SERVER_ADDRESS,
     ENV_SERVER_PORT,
     ENV_SERVER_QUEUE_LIMIT,
-    ENV_SERVER_NORMALIZE_RESPONSE_TERMINATORS,
+    ENV_DEVICE_NORMALIZE_GRBL_RESPONSES,
     Config,
 )
 from .service import GCodeProxyService
@@ -85,12 +85,12 @@ def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
     help=f"Command queue size limit (default: 50). [env: {ENV_SERVER_QUEUE_LIMIT}]",
 )
 @click.option(
-    "--normalize-response-terminators/--no-normalize-response-terminators",
-    "normalize_response_terminators",
+    "--normalize-grbl-responses/--no-normalize-grbl-responses",
+    "normalize_grbl_responses",
     default=None,
     help=(
-        f"Normalize response terminators to separate lines (default: on). "
-        f"[env: {ENV_SERVER_NORMALIZE_RESPONSE_TERMINATORS}]"
+        f"Normalize GRBL responses by cleaning ESP logs (default: on). "
+        f"[env: {ENV_DEVICE_NORMALIZE_GRBL_RESPONSES}]"
     ),
 )
 @click.option(
@@ -158,7 +158,7 @@ def main(
     port: int | None,
     address: str | None,
     queue_limit: int | None,
-    normalize_response_terminators: bool | None,
+    normalize_grbl_responses: bool | None,
     usb_id: str | None,
     dev_path: str | None,
     baud_rate: int | None,
@@ -213,8 +213,8 @@ def main(
         cli_args["address"] = address
     if queue_limit is not None:
         cli_args["queue_limit"] = queue_limit
-    if normalize_response_terminators is not None:
-        cli_args["normalize_response_terminators"] = normalize_response_terminators
+    if normalize_grbl_responses is not None:
+        cli_args["normalize_grbl_responses"] = normalize_grbl_responses
     if usb_id is not None:
         cli_args["usb_id"] = usb_id
     if dev_path is not None:
@@ -258,7 +258,7 @@ def main(
         logger.info(f"  Serial delay: {config.device.serial_delay}s")
     logger.info(f"  Server: {config.server.address}:{config.server.port}")
     logger.info(f"  Queue limit: {config.server.queue_limit}")
-    logger.info(f"  Normalize response terminators: {config.device.normalize_response_terminators}")
+    logger.info(f"  Normalize GRBL responses: {config.device.normalize_grbl_responses}")
     if config.gcode_log_file:
         logger.info(f"  GCode log file: {config.gcode_log_file}")
     if config.custom_triggers:
@@ -281,7 +281,7 @@ def main(
             gcode_handler=trigger_manager,
             gcode_log_file=config.gcode_log_file,
             queue_limit=config.server.queue_limit,
-            normalize_response_terminators=config.device.normalize_response_terminators,
+            normalize_grbl_responses=config.device.normalize_grbl_responses,
         )
     else:
         # Either usb_id or dev_path is guaranteed to be set after validation
@@ -296,7 +296,7 @@ def main(
             gcode_handler=trigger_manager,
             gcode_log_file=config.gcode_log_file,
             queue_limit=config.server.queue_limit,
-            normalize_response_terminators=config.device.normalize_response_terminators,
+            normalize_grbl_responses=config.device.normalize_grbl_responses,
         )
         service.trigger_manager = trigger_manager
     

@@ -22,8 +22,8 @@ from .handlers import (
 )
 from .utils import (
     SerialConnectionError,
+    clean_grbl_response,
     find_serial_port_by_usb_id,
-    normalize_response_terminators,
 )
 
 if TYPE_CHECKING:
@@ -48,7 +48,7 @@ class GCodeDevice:
         response_handler: ResponseHandler | None = None,
         response_timeout: float = 5.0,
         gcode_log_file: str | None = None,
-        normalize_response_terminators: bool = True,
+        normalize_grbl_responses: bool = True,
     ):
         """
         Initialize the GCode device.
@@ -59,15 +59,15 @@ class GCodeDevice:
             response_handler: Custom handler for serial responses.
             response_timeout: Timeout in seconds for waiting for device response.
             gcode_log_file: Optional path to file for logging GCode communication.
-            normalize_response_terminators: Whether to normalize response
-                terminators (default: True).
+            normalize_grbl_responses: Whether to normalize GRBL
+                responses (default: True).
         """
         self.task_queue = task_queue
         self.gcode_handler = gcode_handler or DefaultGCodeHandler()
         self.response_handler = response_handler or DefaultResponseHandler()
         self.response_timeout = response_timeout
         self.gcode_log_file = Path(gcode_log_file) if gcode_log_file else None
-        self.normalize_response_terminators = normalize_response_terminators
+        self.normalize_grbl_responses = normalize_grbl_responses
 
         self._connected = False
         self._log_lock = asyncio.Lock()
@@ -304,19 +304,21 @@ class GCodeSerialProtocol(asyncio.Protocol):
     incoming data until complete responses are received.
     """
 
-    def __init__(self, normalize_response_terminators: bool = True):
+    # Response terminators that indicate end of device response
+    RESPONSE_TERMINATORS = ("ok", "error", "!!")
+
+    def __init__(self, normalize_grbl_responses: bool = True):
         """
         Initialize the protocol.
 
         Args:
-            normalize_response_terminators: Whether to normalize response terminators.
+            normalize_grbl_responses: Whether to normalize GRBL responses.
         """
         self.transport: asyncio.Transport | None = None
-        self._buffer = ""
         self._response_event = asyncio.Event()
         self._response_lines: list[str] = []
         self._response_complete = False
-        self.normalize_response_terminators = normalize_response_terminators
+        self.normalize_grbl_responses = normalize_grbl_responses
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         """Called when the connection is established."""
@@ -341,21 +343,18 @@ class GCodeSerialProtocol(asyncio.Protocol):
         are on their own lines before processing.
         """
 
-        # logger.debug(f"Raw Data received: {data!r}")
         # Decode the incoming data
         decoded_data = data.decode("utf-8", errors="replace")
-        self._buffer += decoded_data
-
-        # Normalize terminators to be on separate lines if enabled
-        if self.normalize_response_terminators:
-            self._buffer = normalize_response_terminators(
-                self._buffer,
-                self.RESPONSE_TERMINATORS,
-            )
-
+        
+        lines = decoded_data.split("\n")
+        
         # Process complete lines
-        while "\n" in self._buffer:
-            line, self._buffer = self._buffer.split("\n", 1)
+        for line in lines:
+            # Normalize GRBL responses if enabled
+            if self.normalize_grbl_responses:
+                line = clean_grbl_response(line)
+    
+            logger.debug(f"Cleaned line: {line}")
             decoded_line = line.strip()
 
             if not decoded_line:
@@ -436,7 +435,7 @@ class GCodeSerialDevice(GCodeDevice):
         read_buffer_size: int = 4096,
         initialization_delay: float = 0.1,
         gcode_log_file: str | None = None,
-        normalize_response_terminators: bool = True,
+        normalize_grbl_responses: bool = True,
     ):
         """
         Initialize the GCode serial device.
@@ -452,8 +451,8 @@ class GCodeSerialDevice(GCodeDevice):
             read_buffer_size: Size of the read buffer for serial communication.
             initialization_delay: Delay in seconds to allow device initialization after connection.
             gcode_log_file: Optional path to file for logging GCode communication.
-            normalize_response_terminators: Whether to normalize response
-                terminators (default: True).
+            normalize_grbl_responses: Whether to normalize GRBL
+                responses (default: True).
 
         Raises:
             ValueError: If neither usb_id nor dev_path are provided
@@ -474,7 +473,7 @@ class GCodeSerialDevice(GCodeDevice):
         self.response_timeout = response_timeout
         self.read_buffer_size = read_buffer_size
         self.initialization_delay = initialization_delay
-        self.normalize_response_terminators = normalize_response_terminators
+        self.normalize_grbl_responses = normalize_grbl_responses
 
         self._transport: asyncio.Transport | None = None
         self._protocol: GCodeSerialProtocol | None = None
@@ -512,7 +511,7 @@ class GCodeSerialDevice(GCodeDevice):
         # Create protocol factory that passes the normalize flag
         def protocol_factory():
             return GCodeSerialProtocol(
-                normalize_response_terminators=self.normalize_response_terminators
+                normalize_grbl_responses=self.normalize_grbl_responses
             )
 
         self._transport, self._protocol = await serial_asyncio.create_serial_connection(
@@ -572,7 +571,6 @@ class GCodeSerialDevice(GCodeDevice):
         await asyncio.sleep(self.initialization_delay)
 
         # Clear any buffered data
-        self._protocol._buffer = ""
         self._protocol._response_lines = []
 
     async def _send(self, gcode: str) -> None:

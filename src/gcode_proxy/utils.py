@@ -69,65 +69,34 @@ def find_serial_port_by_usb_id(usb_id: str) -> str:
     )
 
 
-# Response terminators that indicate end of device response
-RESPONSE_TERMINATORS = ("ok", "error", "!!")
-
-def normalize_response_terminators(
-    data: str,
-    terminators: tuple[str, ...],
-) -> str:
+def clean_grbl_response(raw_line: str) -> str:
     """
-    Normalize response data by ensuring all terminators are on separate lines.
+    Clean a single line of GRBL response by removing ESP log output.
 
-    Scans through the entire data buffer and identifies terminators that are stuck
-    at the end of content lines due to serial corruption (e.g., "gpio_install_isrok\r\r\n"
-    where "ok" should be on its own line). Inserts newlines to separate them.
+    ESP logging can clobber serial responses. This function detects and removes
+    ESP log headers while preserving valid GRBL response content.
 
     Args:
-        data: The response data string to process.
-        terminators: Tuple of valid terminators (e.g., ("ok", "error", "!!")).
+        raw_line: A single line of raw serial output.
 
     Returns:
-        The normalized data with all terminators on their own lines.
+        The cleaned line with ESP log prefixes removed, or empty string if
+        line contains only ESP logging.
 
     Example:
-        >>> normalize_response_terminators(
-        ...     "gpio_install_isrok\nok\nerror_msg\nerror",
-        ...     ("ok", "error", "!!")
-        ... )
-        "gpio_install_isrok\nok\nerror_msg\nerror"
-
-        >>> normalize_response_terminators(
-        ...     "response dataok",
-        ...     ("ok", "error", "!!")
-        ... )
-        "response data\nok"
+        >>> clean_grbl_response("I (123) tag: ok")
+        "ok"
+        >>> clean_grbl_response("E (456) mytag: error:5")
+        "error:5"
+        >>> clean_grbl_response("ok")
+        "ok"
     """
-    # Build case-insensitive regex pattern for terminators at line end
-    # Matches: any content (non-newline) + optional whitespace + terminator + optional \r
-    terminators_pattern = "|".join(re.escape(t) for t in terminators)
-    pattern = rf"^([^\r\n]*?)\s*({terminators_pattern})(\r?)$"
+    # The regex focuses on the end of the string
+    pattern = r"^.*?(ok|error:\d+|ALARM:\d+|<[^>]+>|\[MSG:[^\]]+\]|Grbl\s\d+\.\d+.*)$"
+    match = re.search(pattern, raw_line.strip())
+    
+    cleaned = ""
+    if match:
+        cleaned = match.group(1) # Return only the GRBL part
 
-    lines = data.split("\n")
-    result_lines = []
-
-    for line in lines:
-        match = re.match(pattern, line, re.IGNORECASE)
-        if match:
-            prefix = match.group(1).strip()
-            terminator = match.group(2)
-            carriage_return = match.group(3)
-
-            # Only separate if there's actual content before the terminator
-            # and that content isn't just another terminator
-            if prefix and prefix.lower() not in terminators:
-                result_lines.append(prefix)
-                result_lines.append(terminator + carriage_return)
-            else:
-                # Line is just a terminator or empty, keep as is
-                result_lines.append(line)
-        else:
-            # Regular line without terminator at end, keep as is
-            result_lines.append(line)
-
-    return "\n".join(result_lines)
+    return cleaned.strip()

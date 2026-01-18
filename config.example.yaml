@@ -48,12 +48,12 @@ device:
   # Environment variable: DEVICE_SERIAL_DELAY
   serial-delay: 0.1
   
-  # Normalize response terminators to separate lines
-  # When enabled, terminators (ok, error, !!) that end up on the same line as
-  # response content due to serial corruption are separated onto their own lines.
-  # This is enabled by default but can be disabled if it causes issues.
-  # Environment variable: SERVER_NORMALIZE_RESPONSE_TERMINATORS
-  normalize-response-terminators: true
+  # Normalize GRBL responses by cleaning ESP logs
+  # When enabled, ESP log output that clobbers serial communication is removed,
+  # ensuring clean GRBL responses are sent to clients. This is enabled by default
+  # but can be disabled if it causes issues with your specific device.
+  # Environment variable: DEVICE_NORMALIZE_GRBL_RESPONSES
+  normalize-grbl-responses: true
 
 # GCode communication log file
 # Optional path to a file where all GCode commands sent to the device
@@ -73,11 +73,11 @@ custom-triggers:
     trigger:
       type: gcode
       match: M8
-    command: "hostname"
+    command: "hass-cli service call homeassistant.turn_on --arguments entity_id=switch.laser_air_assist"
   
   # Example: Air assist off (M9 command)
   - id: air-assist-off
     trigger:
       type: gcode
       match: M9
-    command: "./scripts/air_assist.py --state off"
+      command: "hass-cli service call homeassistant.turn_off --arguments entity_id=switch.laser_air_assist"

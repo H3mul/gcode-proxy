@@ -29,7 +29,7 @@ class GCodeServer:
         port: int = 8080,
         response_timeout: float = 30.0,
         queue_limit: int = 50,
-        normalize_response_terminators: bool = True,
+        normalize_grbl_responses: bool = True,
     ):
         """
         Initialize the GCode server.
@@ -40,15 +40,15 @@ class GCodeServer:
             port: The port to listen on.
             response_timeout: Timeout in seconds for waiting for device response.
             queue_limit: Maximum number of commands allowed in the queue.
-            normalize_response_terminators: Whether to normalize response
-                terminators (default: True).
+            normalize_grbl_responses: Whether to normalize GRBL
+                responses (default: True).
         """
         self.task_queue = task_queue
         self.address = address
         self.port = port
         self.response_timeout = response_timeout
         self.queue_limit = queue_limit
-        self.normalize_response_terminators = normalize_response_terminators
+        self.normalize_grbl_responses = normalize_grbl_responses
         
         self._server: asyncio.Server | None = None
         self._running = False

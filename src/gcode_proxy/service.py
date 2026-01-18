@@ -34,7 +34,7 @@ class GCodeProxyService:
         trigger_manager: TriggerManager | None = None,
         task_queue: TaskQueue | None = None,
         queue_limit: int = 50,
-        normalize_response_terminators: bool = True,
+        normalize_grbl_responses: bool = True,
     ):
         """
         Initialize the proxy service with an existing device.
@@ -46,8 +46,8 @@ class GCodeProxyService:
             trigger_manager: Optional TriggerManager for handling GCode triggers.
             task_queue: Optional TaskQueue; if not provided, one will be created.
             queue_limit: Maximum size of the command queue (default: 50).
-            normalize_response_terminators: Whether to normalize response
-                terminators (default: True).
+            normalize_grbl_responses: Whether to normalize GRBL
+                responses (default: True).
         """
         self.device = device
         self.trigger_manager = trigger_manager
@@ -64,7 +64,7 @@ class GCodeProxyService:
             address=address,
             port=port,
             queue_limit=queue_limit,
-            normalize_response_terminators=normalize_response_terminators,
+            normalize_grbl_responses=normalize_grbl_responses,
         )
     
     @classmethod
@@ -80,7 +80,7 @@ class GCodeProxyService:
         response_handler: ResponseHandler | None = None,
         gcode_log_file: str | None = None,
         queue_limit: int = 50,
-        normalize_response_terminators: bool = True,
+        normalize_grbl_responses: bool = True,
     ) -> "GCodeProxyService":
         """
         Create a proxy service with a serial device.
@@ -99,8 +99,8 @@ class GCodeProxyService:
             response_handler: Optional custom response handler.
             gcode_log_file: Optional path to file for logging GCode communication.
             queue_limit: Maximum size of the command queue (default: 50).
-            normalize_response_terminators: Whether to normalize response
-                terminators (default: True).
+            normalize_grbl_responses: Whether to normalize GRBL
+                responses (default: True).
             
         Returns:
             A configured GCodeProxyService instance.
@@ -117,7 +117,7 @@ class GCodeProxyService:
             gcode_handler=gcode_handler,
             response_handler=response_handler,
             gcode_log_file=gcode_log_file,
-            normalize_response_terminators=normalize_response_terminators,
+            normalize_grbl_responses=normalize_grbl_responses,
         )
         return cls(
             device=device,
@@ -125,7 +125,7 @@ class GCodeProxyService:
             port=port,
             task_queue=task_queue,
             queue_limit=queue_limit,
-            normalize_response_terminators=normalize_response_terminators,
+            normalize_grbl_responses=normalize_grbl_responses,
         )
     
     @classmethod
@@ -137,7 +137,7 @@ class GCodeProxyService:
         response_handler: ResponseHandler | None = None,
         gcode_log_file: str | None = None,
         queue_limit: int = 50,
-        normalize_response_terminators: bool = True,
+        normalize_grbl_responses: bool = True,
     ) -> "GCodeProxyService":
         """
         Create a proxy service with a dry-run device.
@@ -152,8 +152,8 @@ class GCodeProxyService:
             response_handler: Optional custom response handler.
             gcode_log_file: Optional path to file for logging GCode communication.
             queue_limit: Maximum size of the command queue (default: 50).
-            normalize_response_terminators: Whether to normalize response
-                terminators (default: True).
+            normalize_grbl_responses: Whether to normalize GRBL
+                responses (default: True).
             
         Returns:
             A configured GCodeProxyService instance.
@@ -166,7 +166,7 @@ class GCodeProxyService:
             gcode_handler=gcode_handler,
             response_handler=response_handler,
             gcode_log_file=gcode_log_file,
-            normalize_response_terminators=normalize_response_terminators,
+            normalize_grbl_responses=normalize_grbl_responses,
         )
         return cls(
             device=device,
@@ -174,7 +174,7 @@ class GCodeProxyService:
             port=port,
             task_queue=task_queue,
             queue_limit=queue_limit,
-            normalize_response_terminators=normalize_response_terminators,
+            normalize_grbl_responses=normalize_grbl_responses,
         )
     
     async def run(self) -> None:
