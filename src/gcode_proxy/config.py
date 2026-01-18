@@ -22,6 +22,8 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "gcode-proxy" / "config.yaml"
 # Environment variable names
 ENV_SERVER_PORT = "SERVER_PORT"
 ENV_SERVER_ADDRESS = "SERVER_ADDRESS"
+ENV_SERVER_QUEUE_LIMIT = "SERVER_QUEUE_LIMIT"
+ENV_SERVER_NORMALIZE_RESPONSE_TERMINATORS = "SERVER_NORMALIZE_RESPONSE_TERMINATORS"
 ENV_DEVICE_USB_ID = "DEVICE_USB_ID"
 ENV_DEVICE_DEV_PATH = "DEVICE_DEV_PATH"
 ENV_DEVICE_BAUD_RATE = "DEVICE_BAUD_RATE"
@@ -36,6 +38,7 @@ class ServerConfig:
     
     port: int = 8080
     address: str = "0.0.0.0"
+    queue_limit: int = 50
 
 
 @dataclass
@@ -47,6 +50,7 @@ class DeviceConfig:
     baud_rate: int = 115200
     serial_delay: float = 0.1
     gcode_log_file: str | None = None
+    normalize_response_terminators: bool = True
 
 
 @dataclass
@@ -137,6 +141,10 @@ class Config:
                 config.server.port = int(server_data["port"])
             if "address" in server_data:
                 config.server.address = str(server_data["address"])
+            if "queue-limit" in server_data:
+                config.server.queue_limit = int(server_data["queue-limit"])
+            elif "queue_limit" in server_data:
+                config.server.queue_limit = int(server_data["queue_limit"])
         
         # Parse device config
         if "device" in data:
@@ -157,8 +165,16 @@ class Config:
                 config.device.serial_delay = float(device_data["serial_delay"])
             if "gcode-log-file" in device_data:
                 config.device.gcode_log_file = str(device_data["gcode-log-file"])
-            elif "gcode_log_file" in device_data:
+            if "gcode_log_file" in device_data:
                 config.device.gcode_log_file = str(device_data["gcode_log_file"])
+            if "normalize-response-terminators" in device_data:
+                config.device.normalize_response_terminators = bool(
+                    device_data["normalize-response-terminators"]
+                )
+            elif "normalize_response_terminators" in device_data:
+                config.device.normalize_response_terminators = bool(
+                    device_data["normalize_response_terminators"]
+                )
         
         # Parse gcode-log-file at root level
         if "gcode-log-file" in data:
@@ -196,6 +212,14 @@ class Config:
         if cli_args.get("address") is not None:
             config.server.address = str(cli_args["address"])
         
+        if cli_args.get("queue_limit") is not None:
+            config.server.queue_limit = int(cli_args["queue_limit"])
+        
+        if cli_args.get("normalize_response_terminators") is not None:
+            config.device.normalize_response_terminators = bool(
+                cli_args["normalize_response_terminators"]
+            )
+        
         if cli_args.get("usb_id") is not None:
             config.device.usb_id = str(cli_args["usb_id"])
         
@@ -228,6 +252,18 @@ class Config:
         
         if ENV_SERVER_ADDRESS in os.environ:
             config.server.address = os.environ[ENV_SERVER_ADDRESS]
+        
+        if ENV_SERVER_QUEUE_LIMIT in os.environ:
+            config.server.queue_limit = int(os.environ[ENV_SERVER_QUEUE_LIMIT])
+        
+        if ENV_SERVER_NORMALIZE_RESPONSE_TERMINATORS in os.environ:
+            env_value = os.environ[ENV_SERVER_NORMALIZE_RESPONSE_TERMINATORS].lower()
+            config.device.normalize_response_terminators = env_value in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
         
         if ENV_DEVICE_USB_ID in os.environ:
             config.device.usb_id = os.environ[ENV_DEVICE_USB_ID]
@@ -329,6 +365,8 @@ class Config:
             "server": {
                 "port": self.server.port,
                 "address": self.server.address,
+                "queue-limit": self.server.queue_limit,
+                "normalize-response-terminators": self.device.normalize_response_terminators,
             },
             "device": device_data,
         }

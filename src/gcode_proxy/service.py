@@ -33,6 +33,8 @@ class GCodeProxyService:
         port: int = 8080,
         trigger_manager: TriggerManager | None = None,
         task_queue: TaskQueue | None = None,
+        queue_limit: int = 50,
+        normalize_response_terminators: bool = True,
     ):
         """
         Initialize the proxy service with an existing device.
@@ -43,12 +45,15 @@ class GCodeProxyService:
             port: Port to listen on.
             trigger_manager: Optional TriggerManager for handling GCode triggers.
             task_queue: Optional TaskQueue; if not provided, one will be created.
+            queue_limit: Maximum size of the command queue (default: 50).
+            normalize_response_terminators: Whether to normalize response
+                terminators (default: True).
         """
         self.device = device
         self.trigger_manager = trigger_manager
         
         # Create the task queue if not provided
-        self.task_queue = task_queue or create_task_queue()
+        self.task_queue = task_queue or create_task_queue(maxsize=queue_limit)
         
         # Set the task queue on the device
         self.device.set_task_queue(self.task_queue)
@@ -58,6 +63,8 @@ class GCodeProxyService:
             task_queue=self.task_queue,
             address=address,
             port=port,
+            queue_limit=queue_limit,
+            normalize_response_terminators=normalize_response_terminators,
         )
     
     @classmethod
@@ -72,6 +79,8 @@ class GCodeProxyService:
         gcode_handler: GCodeHandler | None = None,
         response_handler: ResponseHandler | None = None,
         gcode_log_file: str | None = None,
+        queue_limit: int = 50,
+        normalize_response_terminators: bool = True,
     ) -> "GCodeProxyService":
         """
         Create a proxy service with a serial device.
@@ -89,12 +98,15 @@ class GCodeProxyService:
             gcode_handler: Optional custom GCode handler.
             response_handler: Optional custom response handler.
             gcode_log_file: Optional path to file for logging GCode communication.
+            queue_limit: Maximum size of the command queue (default: 50).
+            normalize_response_terminators: Whether to normalize response
+                terminators (default: True).
             
         Returns:
             A configured GCodeProxyService instance.
         """
         # Create the task queue
-        task_queue = create_task_queue()
+        task_queue = create_task_queue(maxsize=queue_limit)
         
         device = GCodeSerialDevice(
             usb_id=usb_id,
@@ -105,8 +117,16 @@ class GCodeProxyService:
             gcode_handler=gcode_handler,
             response_handler=response_handler,
             gcode_log_file=gcode_log_file,
+            normalize_response_terminators=normalize_response_terminators,
         )
-        return cls(device=device, address=address, port=port, task_queue=task_queue)
+        return cls(
+            device=device,
+            address=address,
+            port=port,
+            task_queue=task_queue,
+            queue_limit=queue_limit,
+            normalize_response_terminators=normalize_response_terminators,
+        )
     
     @classmethod
     def create_dry_run(
@@ -116,6 +136,8 @@ class GCodeProxyService:
         gcode_handler: GCodeHandler | None = None,
         response_handler: ResponseHandler | None = None,
         gcode_log_file: str | None = None,
+        queue_limit: int = 50,
+        normalize_response_terminators: bool = True,
     ) -> "GCodeProxyService":
         """
         Create a proxy service with a dry-run device.
@@ -129,20 +151,31 @@ class GCodeProxyService:
             gcode_handler: Optional custom GCode handler.
             response_handler: Optional custom response handler.
             gcode_log_file: Optional path to file for logging GCode communication.
+            queue_limit: Maximum size of the command queue (default: 50).
+            normalize_response_terminators: Whether to normalize response
+                terminators (default: True).
             
         Returns:
             A configured GCodeProxyService instance.
         """
         # Create the task queue
-        task_queue = create_task_queue()
+        task_queue = create_task_queue(maxsize=queue_limit)
         
         device = GCodeDevice(
             task_queue=task_queue,
             gcode_handler=gcode_handler,
             response_handler=response_handler,
             gcode_log_file=gcode_log_file,
+            normalize_response_terminators=normalize_response_terminators,
         )
-        return cls(device=device, address=address, port=port, task_queue=task_queue)
+        return cls(
+            device=device,
+            address=address,
+            port=port,
+            task_queue=task_queue,
+            queue_limit=queue_limit,
+            normalize_response_terminators=normalize_response_terminators,
+        )
     
     async def run(self) -> None:
         """

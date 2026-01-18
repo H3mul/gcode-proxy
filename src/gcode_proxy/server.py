@@ -28,6 +28,8 @@ class GCodeServer:
         address: str = "0.0.0.0",
         port: int = 8080,
         response_timeout: float = 30.0,
+        queue_limit: int = 50,
+        normalize_response_terminators: bool = True,
     ):
         """
         Initialize the GCode server.
@@ -37,11 +39,16 @@ class GCodeServer:
             address: The address to bind the server to.
             port: The port to listen on.
             response_timeout: Timeout in seconds for waiting for device response.
+            queue_limit: Maximum number of commands allowed in the queue.
+            normalize_response_terminators: Whether to normalize response
+                terminators (default: True).
         """
         self.task_queue = task_queue
         self.address = address
         self.port = port
         self.response_timeout = response_timeout
+        self.queue_limit = queue_limit
+        self.normalize_response_terminators = normalize_response_terminators
         
         self._server: asyncio.Server | None = None
         self._running = False
@@ -161,7 +168,6 @@ class GCodeServer:
         """
         try:
             response = await task.wait_for_response(timeout=timeout)
-            logger.debug(f"Sent response to {task.client_address}: {response}")
             await task.send_response_to_client(response)
         except asyncio.TimeoutError:
             error_msg = "error: timeout waiting for device response"
@@ -218,6 +224,23 @@ class GCodeServer:
                 # Process each command by creating tasks and queuing them
                 for command in commands:
                     try:
+                        # Check if queue is at or above the limit
+                        if self.task_queue.qsize() >= self.queue_limit:
+                            error_msg = (
+                                f"error: command queue is full (limit: {self.queue_limit})"
+                            )
+                            logger.warning(
+                                f"Queue full, rejecting command from {client_address}: "
+                                f"{command}"
+                            )
+                            try:
+                                error_response = f"{error_msg}\n"
+                                writer.write(error_response.encode("utf-8"))
+                                await writer.drain()
+                            except Exception:
+                                pass
+                            continue
+                        
                         # Create a task for this command
                         task = Task(
                             command=command,

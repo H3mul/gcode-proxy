@@ -22,6 +22,11 @@ server:
   # Use 127.0.0.1 to only accept local connections
   # Environment variable: SERVER_ADDRESS
   address: 0.0.0.0
+  
+  # Maximum number of commands allowed in the queue
+  # When the queue reaches this limit, new commands are rejected with an error
+  # Environment variable: SERVER_QUEUE_LIMIT
+  queue-limit: 50
 
 device:
   # USB device ID in vendor:product format
@@ -42,6 +47,13 @@ device:
   # Some devices need time to initialize after connection
   # Environment variable: DEVICE_SERIAL_DELAY
   serial-delay: 0.1
+  
+  # Normalize response terminators to separate lines
+  # When enabled, terminators (ok, error, !!) that end up on the same line as
+  # response content due to serial corruption are separated onto their own lines.
+  # This is enabled by default but can be disabled if it causes issues.
+  # Environment variable: SERVER_NORMALIZE_RESPONSE_TERMINATORS
+  normalize-response-terminators: true
 
 # GCode communication log file
 # Optional path to a file where all GCode commands sent to the device
