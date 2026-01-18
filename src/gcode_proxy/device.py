@@ -179,11 +179,12 @@ class GCodeDevice:
         Process a single task.
 
         Calls the GCode handler and waits for it to complete. The handler may
-        match triggers and decide whether the GCode should be forwarded to the
-        device or intercepted. Supports three trigger behaviors:
-        - forward: Send GCode to device, execute trigger async, return device response
-        - capture: Don't send GCode to device, execute trigger, return fake response
-        - capture-nowait: Don't send GCode to device, execute trigger async, return immediately
+        match one or more triggers that decide whether the GCode should be
+        forwarded to the device or intercepted. Multiple triggers can match
+        with different behaviors:
+        - If ANY trigger is FORWARD, GCode is sent to device
+        - If ALL triggers are CAPTURE, GCode is not sent to device
+        - Responses are merged based on trigger execution results
 
         Args:
             task: The task to process.
@@ -196,7 +197,8 @@ class GCodeDevice:
 
         try:
             # Call the GCode handler and wait for it to complete
-            # For triggers, this executes the trigger and returns behavior metadata
+            # For triggers, this executes all matching triggers and returns
+            # behavior metadata and aggregated results
             handler_result = await self.gcode_handler.on_gcode(gcode, client_address)
 
             # Log the GCode command
@@ -206,15 +208,17 @@ class GCodeDevice:
             # Determine whether to send GCode to device based on trigger behavior
             should_forward = True
             fake_response = None
+            aggregated_result = None
 
             if handler_result and isinstance(handler_result, dict):
                 should_forward = handler_result.get('should_forward', True)
                 fake_response = handler_result.get('fake_response')
+                aggregated_result = handler_result.get('all_results')
 
             if not should_forward:
-                # Trigger captured the command, don't send to device
+                # All triggers captured the command, don't send to device
                 response = fake_response or 'ok'
-                logger.debug(f"Trigger captured command, returning: {response}")
+                logger.debug(f"All triggers captured command, returning: {response}")
             else:
                 # Send to device and wait for response
                 await self._send(gcode)
@@ -224,9 +228,17 @@ class GCodeDevice:
 
                 logger.debug(f"Sent: {gcode.strip()}")
 
-                response = await receive_task
+                device_response = await receive_task
 
-                logger.debug(f"Received: {response.strip()}")
+                logger.debug(f"Received: {device_response.strip()}")
+
+                # Merge device response with trigger results if there are triggers
+                if aggregated_result is not None:
+                    response = aggregated_result.get_response(
+                        device_response=device_response
+                    )
+                else:
+                    response = device_response
 
             # Set the response on the task
             task.set_response(response)

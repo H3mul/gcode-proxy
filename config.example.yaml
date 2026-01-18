@@ -103,5 +103,5 @@ custom-triggers:
   - id: air-vent-off
     trigger:
       type: gcode
-      match: M7\.1
+      match: M7\.1|M9
     command: "hass-cli service call homeassistant.turn_off --arguments entity_id=fan.laser_vent"
