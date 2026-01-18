@@ -46,7 +46,7 @@ class GCodeDevice:
         task_queue: "TaskQueue | None" = None,
         gcode_handler: GCodeHandler | None = None,
         response_handler: ResponseHandler | None = None,
-        response_timeout: float = 5.0,
+        response_timeout: float = 30.0,
         gcode_log_file: str | None = None,
         normalize_grbl_responses: bool = True,
     ):
@@ -200,7 +200,7 @@ class GCodeDevice:
 
             # Log the GCode command
             source_address = f"{client_address[0]}:{client_address[1]}"
-            await self._log_gcode(task.command, source_address)
+            self.run_noncritical_task(self._log_gcode(task.command, source_address))
 
             response = await receive_task
 
@@ -219,7 +219,10 @@ class GCodeDevice:
 
         except asyncio.TimeoutError:
             logger.warning(f"Timeout waiting for response to: {gcode.strip()}")
-            task.set_response("")
+            message = "server-error: timed out waiting for server response"
+            self.run_noncritical_task(
+                self._log_gcode(message, "device"))
+            task.set_response(message)
         except Exception as e:
             logger.error(f"Error sending GCode: {e}")
             task.set_error(SerialConnectionError(f"Failed to send GCode: {e}"))
@@ -430,7 +433,7 @@ class GCodeSerialDevice(GCodeDevice):
         task_queue: "TaskQueue | None" = None,
         gcode_handler: GCodeHandler | None = None,
         response_handler: ResponseHandler | None = None,
-        response_timeout: float = 5.0,
+        response_timeout: float = 30.0,
         read_buffer_size: int = 4096,
         initialization_delay: float = 0.1,
         gcode_log_file: str | None = None,

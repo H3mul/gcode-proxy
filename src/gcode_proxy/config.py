@@ -28,6 +28,7 @@ ENV_DEVICE_USB_ID = "DEVICE_USB_ID"
 ENV_DEVICE_DEV_PATH = "DEVICE_DEV_PATH"
 ENV_DEVICE_BAUD_RATE = "DEVICE_BAUD_RATE"
 ENV_DEVICE_SERIAL_DELAY = "DEVICE_SERIAL_DELAY"
+ENV_DEVICE_RESPONSE_TIMEOUT = "DEVICE_RESPONSE_TIMEOUT"
 ENV_GCODE_LOG_FILE = "GCODE_LOG_FILE"
 ENV_CONFIG_FILE = "GCODE_PROXY_CONFIG"
 
@@ -49,6 +50,7 @@ class DeviceConfig:
     path: str | None = None
     baud_rate: int = 115200
     serial_delay: float = 0.1
+    response_timeout: float = 30.0
     gcode_log_file: str | None = None
     normalize_grbl_responses: bool = True
 
@@ -163,6 +165,10 @@ class Config:
                 config.device.serial_delay = float(device_data["serial-delay"])
             elif "serial_delay" in device_data:
                 config.device.serial_delay = float(device_data["serial_delay"])
+            if "response-timeout" in device_data:
+                config.device.response_timeout = float(device_data["response-timeout"])
+            elif "response_timeout" in device_data:
+                config.device.response_timeout = float(device_data["response_timeout"])
             if "gcode-log-file" in device_data:
                 config.device.gcode_log_file = str(device_data["gcode-log-file"])
             elif "gcode_log_file" in device_data:
@@ -233,6 +239,9 @@ class Config:
         if cli_args.get("serial_delay") is not None:
             config.device.serial_delay = float(cli_args["serial_delay"])
         
+        if cli_args.get("response_timeout") is not None:
+            config.device.response_timeout = float(cli_args["response_timeout"])
+        
         if cli_args.get("gcode_log_file") is not None:
             config.gcode_log_file = str(cli_args["gcode_log_file"])
         
@@ -277,6 +286,9 @@ class Config:
         
         if ENV_DEVICE_SERIAL_DELAY in os.environ:
             config.device.serial_delay = float(os.environ[ENV_DEVICE_SERIAL_DELAY])
+        
+        if ENV_DEVICE_RESPONSE_TIMEOUT in os.environ:
+            config.device.response_timeout = float(os.environ[ENV_DEVICE_RESPONSE_TIMEOUT])
         
         if ENV_GCODE_LOG_FILE in os.environ:
             config.gcode_log_file = os.environ[ENV_GCODE_LOG_FILE]
@@ -352,6 +364,7 @@ class Config:
         device_data: dict[str, Any] = {
             "baud-rate": self.device.baud_rate,
             "serial-delay": self.device.serial_delay,
+            "response-timeout": self.device.response_timeout,
             "normalize-grbl-responses": self.device.normalize_grbl_responses,
         }
         

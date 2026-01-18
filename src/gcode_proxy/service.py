@@ -34,6 +34,7 @@ class GCodeProxyService:
         trigger_manager: TriggerManager | None = None,
         task_queue: TaskQueue | None = None,
         queue_limit: int = 50,
+        response_timeout: float = 30.0,
         normalize_grbl_responses: bool = True,
     ):
         """
@@ -46,6 +47,7 @@ class GCodeProxyService:
             trigger_manager: Optional TriggerManager for handling GCode triggers.
             task_queue: Optional TaskQueue; if not provided, one will be created.
             queue_limit: Maximum size of the command queue (default: 50).
+            response_timeout: Timeout in seconds for waiting for device response (default: 30.0).
             normalize_grbl_responses: Whether to normalize GRBL
                 responses (default: True).
         """
@@ -64,6 +66,7 @@ class GCodeProxyService:
             address=address,
             port=port,
             queue_limit=queue_limit,
+            response_timeout=response_timeout,
             normalize_grbl_responses=normalize_grbl_responses,
         )
     
@@ -80,6 +83,7 @@ class GCodeProxyService:
         response_handler: ResponseHandler | None = None,
         gcode_log_file: str | None = None,
         queue_limit: int = 50,
+        response_timeout: float = 30.0,
         normalize_grbl_responses: bool = True,
     ) -> "GCodeProxyService":
         """
@@ -99,6 +103,7 @@ class GCodeProxyService:
             response_handler: Optional custom response handler.
             gcode_log_file: Optional path to file for logging GCode communication.
             queue_limit: Maximum size of the command queue (default: 50).
+            response_timeout: Timeout in seconds for waiting for device response (default: 30.0).
             normalize_grbl_responses: Whether to normalize GRBL
                 responses (default: True).
             
@@ -116,6 +121,7 @@ class GCodeProxyService:
             initialization_delay=serial_delay,
             gcode_handler=gcode_handler,
             response_handler=response_handler,
+            response_timeout=response_timeout,
             gcode_log_file=gcode_log_file,
             normalize_grbl_responses=normalize_grbl_responses,
         )
@@ -125,6 +131,7 @@ class GCodeProxyService:
             port=port,
             task_queue=task_queue,
             queue_limit=queue_limit,
+            response_timeout=response_timeout,
             normalize_grbl_responses=normalize_grbl_responses,
         )
     
@@ -137,6 +144,7 @@ class GCodeProxyService:
         response_handler: ResponseHandler | None = None,
         gcode_log_file: str | None = None,
         queue_limit: int = 50,
+        response_timeout: float = 30.0,
         normalize_grbl_responses: bool = True,
     ) -> "GCodeProxyService":
         """
@@ -152,6 +160,7 @@ class GCodeProxyService:
             response_handler: Optional custom response handler.
             gcode_log_file: Optional path to file for logging GCode communication.
             queue_limit: Maximum size of the command queue (default: 50).
+            response_timeout: Timeout in seconds for waiting for device response (default: 30.0).
             normalize_grbl_responses: Whether to normalize GRBL
                 responses (default: True).
             
@@ -165,6 +174,7 @@ class GCodeProxyService:
             task_queue=task_queue,
             gcode_handler=gcode_handler,
             response_handler=response_handler,
+            response_timeout=response_timeout,
             gcode_log_file=gcode_log_file,
             normalize_grbl_responses=normalize_grbl_responses,
         )
@@ -174,6 +184,7 @@ class GCodeProxyService:
             port=port,
             task_queue=task_queue,
             queue_limit=queue_limit,
+            response_timeout=response_timeout,
             normalize_grbl_responses=normalize_grbl_responses,
         )
     

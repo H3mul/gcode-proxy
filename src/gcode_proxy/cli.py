@@ -22,6 +22,7 @@ from .config import (
     ENV_CONFIG_FILE,
     ENV_DEVICE_BAUD_RATE,
     ENV_DEVICE_DEV_PATH,
+    ENV_DEVICE_RESPONSE_TIMEOUT,
     ENV_DEVICE_SERIAL_DELAY,
     ENV_DEVICE_USB_ID,
     ENV_GCODE_LOG_FILE,
@@ -123,6 +124,15 @@ def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
     help=f"Device initialization delay in seconds. [env: {ENV_DEVICE_SERIAL_DELAY}]",
 )
 @click.option(
+    "--response-timeout",
+    type=float,
+    default=None,
+    help=(
+        f"Timeout in seconds for waiting for device response (default: 30s). "
+        f"[env: {ENV_DEVICE_RESPONSE_TIMEOUT}]"
+    ),
+)
+@click.option(
     "--gcode-log-file",
     type=click.Path(path_type=Path),
     default=None,
@@ -163,6 +173,7 @@ def main(
     dev_path: str | None,
     baud_rate: int | None,
     serial_delay: float | None,
+    response_timeout: float | None,
     gcode_log_file: Path | None,
     dry_run: bool,
     verbose: bool,
@@ -223,6 +234,10 @@ def main(
         cli_args["baud_rate"] = baud_rate
     if serial_delay is not None:
         cli_args["serial_delay"] = serial_delay
+    
+    if response_timeout is not None:
+        cli_args["response_timeout"] = response_timeout
+    
     if gcode_log_file is not None:
         cli_args["gcode_log_file"] = str(gcode_log_file)
     
@@ -256,6 +271,7 @@ def main(
         device_info = config.device.path if config.device.path else config.device.usb_id
         logger.info(f"  Device: {device_info} @ {config.device.baud_rate} baud")
         logger.info(f"  Serial delay: {config.device.serial_delay}s")
+        logger.info(f"  Response timeout: {config.device.response_timeout}s")
     logger.info(f"  Server: {config.server.address}:{config.server.port}")
     logger.info(f"  Queue limit: {config.server.queue_limit}")
     logger.info(f"  Normalize GRBL responses: {config.device.normalize_grbl_responses}")
@@ -278,6 +294,7 @@ def main(
         service = GCodeProxyService.create_dry_run(
             address=config.server.address,
             port=config.server.port,
+            response_timeout=config.device.response_timeout,
             gcode_handler=trigger_manager,
             gcode_log_file=config.gcode_log_file,
             queue_limit=config.server.queue_limit,
@@ -291,6 +308,7 @@ def main(
             dev_path=config.device.path,
             baud_rate=config.device.baud_rate,
             serial_delay=config.device.serial_delay,
+            response_timeout=config.device.response_timeout,
             address=config.server.address,
             port=config.server.port,
             gcode_handler=trigger_manager,
