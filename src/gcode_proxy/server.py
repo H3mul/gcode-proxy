@@ -161,6 +161,7 @@ class GCodeServer:
         """
         try:
             response = await task.wait_for_response(timeout=timeout)
+            logger.debug(f"Sent response to {task.client_address}: {response}")
             await task.send_response_to_client(response)
         except asyncio.TimeoutError:
             error_msg = "error: timeout waiting for device response"

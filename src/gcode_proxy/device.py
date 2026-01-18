@@ -176,6 +176,9 @@ class GCodeDevice:
         gcode = task.command
         client_address = task.client_address
         
+        if not gcode.endswith("\n"):
+            gcode += "\n"
+        
         try:
             await self._send(gcode)
             
@@ -284,7 +287,6 @@ class GCodeDevice:
         """Async context manager exit."""
         await self.disconnect()
 
-
 class GCodeSerialProtocol(asyncio.Protocol):
     """
     asyncio.Protocol implementation for serial communication with GCode devices.
@@ -324,6 +326,7 @@ class GCodeSerialProtocol(asyncio.Protocol):
         
         Buffers data and signals when a complete response is received.
         """
+        
         self._buffer += data
         
         # Process complete lines
@@ -477,7 +480,7 @@ class GCodeSerialDevice(GCodeDevice):
             self._serial_port = find_serial_port_by_usb_id(self.usb_id)
         
         # Create the serial connection using asyncio.Protocol
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._transport, self._protocol = await serial_asyncio.create_serial_connection(
             loop,
             GCodeSerialProtocol,

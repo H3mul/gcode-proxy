@@ -80,6 +80,7 @@ class Task:
             response: The response string to send.
         """
         try:
+            logger.debug(f"Responding to client {self.client_address}: {response}")
             response_data = response + "\n" if not response.endswith("\n") else response
             self.writer.write(response_data.encode("utf-8"))
             await self.writer.drain()
