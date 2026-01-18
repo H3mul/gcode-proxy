@@ -8,9 +8,24 @@ external scripts or perform custom actions based on the data.
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Awaitable
+from dataclasses import dataclass
 from typing import Any
 
 
+@dataclass
+class GCodeHandlerPreResponse:
+    """
+    Response data from on_gcode_pre handler.
+    
+    Attributes:
+        should_forward: Whether to send GCode to device.
+        fake_response: Response for CAPTURE modes, or None.
+        should_synchronize: Whether sync is needed.
+    """
+    should_forward: bool
+    fake_response: str | None
+    should_synchronize: bool
+    
 class GCodeHandler(ABC):
     """
     Abstract base class for handling incoming GCode commands.
@@ -20,26 +35,48 @@ class GCodeHandler(ABC):
     """
     
     @abstractmethod
-    async def on_gcode(
+    async def on_gcode_pre(
         self, gcode: str, client_address: tuple[str, int]
-    ) -> dict[str, Any] | None:
+    ) -> GCodeHandlerPreResponse | None:
         """
         Called when a GCode command is received before being sent to the device.
+        
+        This is the pre-phase handler. For handlers supporting two-stage trigger
+        execution, this should execute non-synchronizing triggers and return
+        behavior metadata. For backwards compatibility, this may also execute
+        all triggers.
         
         Args:
             gcode: The GCode command that was received.
             client_address: Tuple of (host, port) identifying the client.
             
         Returns:
-            Optional dictionary with behavior metadata:
-            - 'triggered': bool - Whether a trigger matched
-            - 'should_forward': bool - Whether to send GCode to device
-            - 'fake_response': str | None - Response for CAPTURE modes
-            - 'behavior': TriggerBehavior | None - The behavior mode used
+            Optional GCodeHandlerPreResponse with behavior metadata:
+            - should_forward: Whether to send GCode to device
+            - fake_response: Response for CAPTURE modes
+            - should_synchronize: Whether sync is needed
             
             Returns None if no special handling is needed (default behavior).
         """
         pass
+
+    async def on_gcode_post(
+        self, gcode: str, client_address: tuple[str, int]
+    ) -> str | None:
+        """
+        Called for post-synchronization trigger handling (optional).
+        
+        This is called after device synchronization (G4 P0) is complete.
+        Handlers that support deferred trigger execution implement this.
+        
+        Args:
+            gcode: The GCode command (for reference).
+            client_address: Tuple of (host, port) identifying the client.
+            
+        Returns:
+            result to send back to the client
+        """
+        return None
 
 
 class ResponseHandler(ABC):
@@ -71,9 +108,9 @@ class DefaultGCodeHandler(GCodeHandler):
     This handler simply passes GCode commands through without modification.
     """
     
-    async def on_gcode(
+    async def on_gcode_pre(
         self, gcode: str, client_address: tuple[str, int]
-    ) -> dict[str, Any] | None:
+    ) -> GCodeHandlerPreResponse | None:
         """No-op, return None for default behavior."""
         return None
 
@@ -117,9 +154,9 @@ class CallbackGCodeHandler(GCodeHandler):
         """
         self._on_gcode = on_gcode
     
-    async def on_gcode(
+    async def on_gcode_pre(
         self, gcode: str, client_address: tuple[str, int]
-    ) -> dict[str, Any] | None:
+    ) -> GCodeHandlerPreResponse | None:
         if self._on_gcode:
             return await self._on_gcode(gcode, client_address)
         return None

@@ -18,6 +18,28 @@ class TestGCodeTriggerConfig:
         config = GCodeTriggerConfig.from_dict(data)
         assert config.type == "gcode"
         assert config.match == "M8"
+        assert config.synchronize is False
+
+    def test_create_from_dict_with_synchronize(self):
+        """Test creating a GCodeTriggerConfig with synchronize flag."""
+        data = {"type": "gcode", "match": "M9", "synchronize": True}
+        config = GCodeTriggerConfig.from_dict(data)
+        assert config.type == "gcode"
+        assert config.match == "M9"
+        assert config.synchronize is True
+
+    def test_create_from_dict_synchronize_false_explicit(self):
+        """Test creating a GCodeTriggerConfig with synchronize explicitly false."""
+        data = {"type": "gcode", "match": "M8", "synchronize": False}
+        config = GCodeTriggerConfig.from_dict(data)
+        assert config.synchronize is False
+
+    def test_create_from_dict_synchronize_defaults_false(self):
+        """Test that synchronize defaults to False when not provided."""
+        data = {"type": "gcode", "match": "M8"}
+        config = GCodeTriggerConfig.from_dict(data)
+        assert hasattr(config, "synchronize")
+        assert config.synchronize is False
 
     def test_create_from_dict_missing_type(self):
         """Test that missing type raises ValueError."""
@@ -60,6 +82,21 @@ class TestCustomTriggerConfig:
         assert config.id == "air-assist-on"
         assert config.trigger.type == "gcode"
         assert config.trigger.match == "M8"
+        assert config.command == "script.py"
+        assert config.trigger.synchronize is False
+
+    def test_create_from_dict_valid_with_synchronize(self):
+        """Test creating CustomTriggerConfig with synchronize flag."""
+        data = {
+            "id": "air-assist-off",
+            "trigger": {"type": "gcode", "match": "M9", "synchronize": True},
+            "command": "script.py",
+        }
+        config = CustomTriggerConfig.from_dict(data)
+        assert config.id == "air-assist-off"
+        assert config.trigger.type == "gcode"
+        assert config.trigger.match == "M9"
+        assert config.trigger.synchronize is True
         assert config.command == "script.py"
 
     def test_create_from_dict_missing_id(self):
@@ -115,6 +152,18 @@ class TestTrigger:
         trigger = Trigger(config)
         assert trigger.id == "test"
         assert trigger.command == "echo test"
+        assert trigger.synchronize is False
+
+    def test_init_with_synchronize(self):
+        """Test creating a trigger with synchronize flag."""
+        config = CustomTriggerConfig(
+            id="test-sync",
+            trigger=GCodeTriggerConfig(type="gcode", match="M9", synchronize=True),
+            command="echo test",
+        )
+        trigger = Trigger(config)
+        assert trigger.id == "test-sync"
+        assert trigger.synchronize is True
 
     def test_init_invalid_regex(self):
         """Test that invalid regex pattern raises ValueError."""
@@ -182,8 +231,9 @@ class TestTrigger:
             command="exit 0",
         )
         trigger = Trigger(config)
-        result = await trigger.execute()
-        assert result is True
+        success, error_msg = await trigger.execute()
+        assert success is True
+        assert error_msg is None
 
     @pytest.mark.asyncio
     async def test_execute_failure(self):
@@ -194,8 +244,9 @@ class TestTrigger:
             command="exit 1",
         )
         trigger = Trigger(config)
-        result = await trigger.execute()
-        assert result is False
+        success, error_msg = await trigger.execute()
+        assert success is False
+        assert error_msg is not None
 
     @pytest.mark.asyncio
     async def test_execute_nonexistent_command(self):
@@ -206,8 +257,9 @@ class TestTrigger:
             command="nonexistent_command_12345",
         )
         trigger = Trigger(config)
-        result = await trigger.execute()
-        assert result is False
+        success, error_msg = await trigger.execute()
+        assert success is False
+        assert error_msg is not None
 
 
 class TestTriggerManager:
@@ -250,8 +302,27 @@ class TestTriggerManager:
             TriggerManager(configs)
 
     @pytest.mark.asyncio
-    async def test_on_gcode_received_no_match(self):
-        """Test on_gcode_received when no trigger matches."""
+    async def test_on_gcode_with_match_behavior_capture(self):
+        """Test on_gcode with matching trigger in CAPTURE mode."""
+        from src.gcode_proxy.triggers_config import TriggerBehavior
+        configs = [
+            CustomTriggerConfig(
+                id="trigger1",
+                trigger=GCodeTriggerConfig(type="gcode", match="M8", behavior=TriggerBehavior.CAPTURE),
+                command="exit 0",
+            ),
+        ]
+        manager = TriggerManager(configs)
+        
+        result = await manager.on_gcode("M8", ("127.0.0.1", 1234))
+        assert result is not None
+        assert result.get("triggered") is True
+        assert result.get("should_forward") is False
+        assert result.get("should_synchronize") is False
+
+    @pytest.mark.asyncio
+    async def test_on_gcode_no_match(self):
+        """Test on_gcode when no trigger matches."""
         configs = [
             CustomTriggerConfig(
                 id="trigger1",
@@ -261,24 +332,29 @@ class TestTriggerManager:
         ]
         manager = TriggerManager(configs)
         
-        result = await manager.on_gcode_received("G28", ("127.0.0.1", 1234))
-        assert result == "G28"
-        assert len(manager._pending_tasks) == 0
+        result = await manager.on_gcode("G28", ("127.0.0.1", 1234))
+        assert result is not None
+        assert result.get("triggered") is False
+        assert result.get("should_forward") is True
+        assert result.get("should_synchronize") is False
 
     @pytest.mark.asyncio
-    async def test_on_gcode_received_with_match(self):
-        """Test on_gcode_received when trigger matches."""
+    async def test_on_gcode_with_match_behavior_forward(self):
+        """Test on_gcode with matching trigger in FORWARD mode."""
+        from src.gcode_proxy.triggers_config import TriggerBehavior
         configs = [
             CustomTriggerConfig(
                 id="trigger1",
-                trigger=GCodeTriggerConfig(type="gcode", match="M8"),
+                trigger=GCodeTriggerConfig(type="gcode", match="M8", behavior=TriggerBehavior.FORWARD),
                 command="exit 0",
             ),
         ]
         manager = TriggerManager(configs)
         
-        result = await manager.on_gcode_received("M8", ("127.0.0.1", 1234))
-        assert result == "M8"
+        result = await manager.on_gcode("M8", ("127.0.0.1", 1234))
+        assert result is not None
+        assert result.get("triggered") is True
+        assert result.get("should_forward") is True
         assert len(manager._pending_tasks) == 1
         
         # Wait for the task to complete
@@ -286,37 +362,56 @@ class TestTriggerManager:
         assert len(manager._pending_tasks) == 0
 
     @pytest.mark.asyncio
-    async def test_on_gcode_received_multiple_matches(self):
-        """Test on_gcode_received with multiple matching triggers."""
+    async def test_on_gcode_multiple_matches_mixed_behavior(self):
+        """Test on_gcode with multiple matching triggers with different behaviors."""
+        from src.gcode_proxy.triggers_config import TriggerBehavior
         configs = [
             CustomTriggerConfig(
                 id="trigger1",
-                trigger=GCodeTriggerConfig(type="gcode", match="M8"),
+                trigger=GCodeTriggerConfig(type="gcode", match="M8", behavior=TriggerBehavior.CAPTURE),
                 command="exit 0",
             ),
             CustomTriggerConfig(
                 id="trigger2",
-                trigger=GCodeTriggerConfig(type="gcode", match="M[89]"),
+                trigger=GCodeTriggerConfig(type="gcode", match="M[89]", behavior=TriggerBehavior.FORWARD),
                 command="exit 0",
             ),
         ]
         manager = TriggerManager(configs)
         
-        result = await manager.on_gcode_received("M8", ("127.0.0.1", 1234))
-        assert result == "M8"
-        # Both triggers should match M8
-        assert len(manager._pending_tasks) == 2
+        result = await manager.on_gcode("M8", ("127.0.0.1", 1234))
+        assert result is not None
+        assert result.get("triggered") is True
+        # FORWARD should override CAPTURE, so should_forward is True
+        assert result.get("should_forward") is True
+        assert len(manager._pending_tasks) == 1
         
         # Wait for tasks to complete
         await asyncio.sleep(0.1)
         assert len(manager._pending_tasks) == 0
 
     @pytest.mark.asyncio
-    async def test_on_gcode_sent(self):
-        """Test on_gcode_sent is a no-op."""
-        manager = TriggerManager()
-        # Should not raise any exceptions
-        await manager.on_gcode_sent("M8", ("127.0.0.1", 1234))
+    async def test_on_gcode_with_capture_nowait_behavior(self):
+        """Test on_gcode with CAPTURE_NOWAIT behavior spawns async task."""
+        from src.gcode_proxy.triggers_config import TriggerBehavior
+        configs = [
+            CustomTriggerConfig(
+                id="trigger1",
+                trigger=GCodeTriggerConfig(type="gcode", match="M8", behavior=TriggerBehavior.CAPTURE_NOWAIT),
+                command="exit 0",
+            ),
+        ]
+        manager = TriggerManager(configs)
+        
+        result = await manager.on_gcode("M8", ("127.0.0.1", 1234))
+        assert result is not None
+        assert result.get("triggered") is True
+        assert result.get("should_forward") is False
+        assert len(manager._pending_tasks) == 1
+        
+        # Wait for task to complete
+        await asyncio.sleep(0.1)
+        assert len(manager._pending_tasks) == 0
 
     @pytest.mark.asyncio
     async def test_shutdown_with_no_pending_tasks(self):
@@ -328,17 +423,18 @@ class TestTriggerManager:
     @pytest.mark.asyncio
     async def test_shutdown_waits_for_tasks(self):
         """Test shutdown waits for pending tasks."""
+        from src.gcode_proxy.triggers_config import TriggerBehavior
         configs = [
             CustomTriggerConfig(
                 id="trigger1",
-                trigger=GCodeTriggerConfig(type="gcode", match="M8"),
-                command="sleep 0.1 && exit 0",
+                trigger=GCodeTriggerConfig(type="gcode", match="M8", behavior=TriggerBehavior.FORWARD),
+                command="exit 0",
             ),
         ]
         manager = TriggerManager(configs)
         
         # Trigger a command
-        await manager.on_gcode_received("M8", ("127.0.0.1", 1234))
+        await manager.on_gcode("M8", ("127.0.0.1", 1234))
         assert len(manager._pending_tasks) == 1
         
         # Shutdown should wait for task

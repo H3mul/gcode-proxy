@@ -49,13 +49,14 @@ class GCodeTriggerConfig:
     type: str
     match: str
     behavior: TriggerBehavior = TriggerBehavior.CAPTURE
+    synchronize: bool = False
     
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GCodeTriggerConfig":
         """Create a GCodeTriggerConfig from a dictionary.
         
         Args:
-            data: Dictionary containing 'type', 'match', and optional 'behavior' keys.
+            data: Dictionary containing 'type', 'match', 'behavior', and 'synchronize' keys.
             
         Returns:
             GCodeTriggerConfig instance.
@@ -69,6 +70,7 @@ class GCodeTriggerConfig:
         trigger_type = data.get("type", "").strip()
         match_pattern = data.get("match", "").strip()
         behavior_str = data.get("behavior", "capture")
+        synchronize = data.get("synchronize", False)
         
         if not trigger_type:
             raise ValueError("Trigger 'type' is required")
@@ -80,7 +82,12 @@ class GCodeTriggerConfig:
         
         behavior = TriggerBehavior.from_string(behavior_str)
         
-        return cls(type=trigger_type, match=match_pattern, behavior=behavior)
+        return cls(
+            type=trigger_type,
+            match=match_pattern,
+            behavior=behavior,
+            synchronize=bool(synchronize),
+        )
 
 
 @dataclass

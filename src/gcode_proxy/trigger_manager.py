@@ -17,7 +17,7 @@ import asyncio
 import logging
 from collections.abc import Sequence
 
-from .handlers import GCodeHandler
+from .handlers import GCodeHandler, GCodeHandlerPreResponse
 from .trigger import Trigger
 from .triggers_config import CustomTriggerConfig, TriggerBehavior
 
@@ -216,7 +216,7 @@ class TriggerManager(GCodeHandler):
                 success=True,
                 error_msg=None,
             )
-        elif trigger.behavior in [TriggerBehavior.CAPTURE]:
+        else:  # trigger.behavior == TriggerBehavior.CAPTURE
             # For CAPTURE, wait for execution to complete
             success, error_msg = await trigger.execute()
             return TriggerExecutionResult(
@@ -226,7 +226,7 @@ class TriggerManager(GCodeHandler):
                 error_msg=error_msg,
             )
 
-    async def execute_all_matching_triggers(
+    async def execute_triggers(
         self, matching_triggers: list[Trigger]
     ) -> MultiTriggerExecutionResult:
         """
@@ -251,76 +251,125 @@ class TriggerManager(GCodeHandler):
         ]
         
         results = await asyncio.gather(*tasks)
-
         return MultiTriggerExecutionResult(results)
 
-    async def on_gcode(
+    async def on_gcode_pre(
         self, gcode: str, client_address: tuple[str, int]
-    ) -> dict[str, object] | None:
+    ) -> GCodeHandlerPreResponse | None:
         """
-        Called when a GCode command is received from a TCP client.
+        Called when a GCode command is first received from a TCP client.
 
-        Checks all registered triggers and handles execution based on behavior.
-        Returns a dictionary with execution metadata that the device can use
-        to determine how to process the GCode.
+        This is the first stage handler that:
+        1. Identifies matching triggers
+        2. Determines forwarding behavior based on trigger types
+        3. Executes triggers that do NOT require synchronization
+        4. Returns metadata for the device to use for conditional execution
 
-        Supports multiple matching triggers with aggregated behavior:
-        - If ANY trigger is FORWARD, GCode is sent to device
-        - If ALL triggers are CAPTURE, GCode is not sent to device
-        - Responses are merged based on execution results
+        Triggers with synchronize=False are executed here. Triggers with
+        synchronize=True are deferred until on_gcode_post is called after
+        synchronization is complete.
 
         Args:
             gcode: The raw GCode command string received.
             client_address: Tuple of (host, port) identifying the client.
 
         Returns:
-            Dictionary with keys:
-            - 'triggered': bool - Whether any trigger matched
-            - 'should_forward': bool - Whether to send GCode to device
-            - 'fake_response': str | None - Response to return for CAPTURE modes
-            - 'all_results': MultiTriggerExecutionResult | None - Aggregated results
+            GCodeHandlerPreResponse with behavior metadata:
+            - should_forward: Whether to send GCode to device
+            - fake_response: Response to return for CAPTURE modes (or None)
+            - should_synchronize: Whether synchronization is needed
+            
+            Note: Additional metadata is stored on the response object
+            (triggered, pre_results) for internal use by the TriggerManager.
         """
         # Find all matching triggers
         matching_triggers = self.find_matching_triggers(gcode)
 
         if not matching_triggers:
             # No triggers matched, pass through normally
-            return {
-                "triggered": False,
-                "should_forward": True,
-                "fake_response": None,
-                "all_results": None,
-            }
+            return GCodeHandlerPreResponse(
+                should_forward=True,
+                fake_response=None,
+                should_synchronize=False,
+            )
 
         logger.debug(
             f"Found {len(matching_triggers)} matching trigger(s) for GCode: "
             f"{gcode.strip()}"
         )
 
-        # Execute all matching triggers
-        aggregated_result = await self.execute_all_matching_triggers(
-            matching_triggers
+        # Separate triggers by synchronization requirement
+        pre_triggers = [t for t in matching_triggers if not t.synchronize]
+        post_triggers = [t for t in matching_triggers if t.synchronize]
+
+        # Execute pre-phase triggers (those that don't require synchronization)
+        pre_results = None
+        if pre_triggers:
+            pre_results = await self.execute_triggers(pre_triggers)
+            for result in pre_results.results:
+                logger.debug(
+                    f"Trigger '{result.trigger_id}' (pre-phase) execution result: "
+                    f"success={result.success}, behavior={result.behavior.value}"
+                )
+
+        should_synchronize = bool(post_triggers)
+        should_forward = any(
+            t.behavior == TriggerBehavior.FORWARD for t in matching_triggers
+        )
+        
+        # If we don't have any sync triggers and aren't forwarding anything to the device,
+        # we can respond right away
+        fake_response = None
+        if not should_forward and not should_synchronize and pre_results:
+            fake_response = pre_results.get_response()
+
+        return GCodeHandlerPreResponse(
+            should_forward=should_forward,
+            fake_response=fake_response,
+            should_synchronize=should_synchronize
         )
 
+    async def on_gcode_post(
+        self, gcode: str, client_address: tuple[str, int]) -> str | None:
+        """
+        Called after synchronization is complete for triggers requiring sync.
+
+        This is the second stage handler that executes all triggers with
+        synchronize=True after the device buffer has been flushed.
+
+        Args:
+            gcode: The raw GCode command string (for reference/logging).
+            client_address: Tuple of (host, port) identifying the client.
+
+        Returns:
+            Dictionary with keys:
+            - 'post_results': MultiTriggerExecutionResult | None - Results from post-phase
+            - 'post_triggered': bool - Whether any post-phase triggers executed
+        """
+        
+        matching_triggers = self.find_matching_triggers(gcode)
+        
+        # Filter to only post-phase triggers (those requiring synchronization)
+        post_triggers = [t for t in matching_triggers if t.synchronize]
+
+        if not post_triggers:
+            return None
+
+        logger.debug(
+            f"Executing {len(post_triggers)} post-synchronization trigger(s)"
+        )
+
+        # Execute post-phase triggers
+        post_results = await self.execute_triggers(post_triggers)
+
         # Log execution results
-        for result in aggregated_result.results:
+        for result in post_results.results:
             logger.debug(
-                f"Trigger '{result.trigger_id}' execution result: "
+                f"Trigger '{result.trigger_id}' (post-sync) execution result: "
                 f"success={result.success}, behavior={result.behavior.value}"
             )
 
-        # Determine response based on aggregated behavior
-        fake_response = None
-        if not aggregated_result.should_forward:
-            # All triggers are CAPTURE mode, use aggregated fake response
-            fake_response = aggregated_result.get_response(device_response=None)
-
-        return {
-            "triggered": True,
-            "should_forward": aggregated_result.should_forward,
-            "fake_response": fake_response,
-            "all_results": aggregated_result,
-        }
+        post_results.get_response()
 
     async def shutdown(self) -> None:
         """

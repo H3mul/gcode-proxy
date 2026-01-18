@@ -37,6 +37,7 @@ class Trigger:
         self.id = config.id
         self.command = config.command
         self.behavior = config.trigger.behavior
+        self.synchronize = config.trigger.synchronize
         
         # Compile the regex pattern for matching GCode
         try:

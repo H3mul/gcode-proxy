@@ -1,5 +1,5 @@
 # GCode Proxy Server Configuration
-# 
+#
 # This file configures the GCode proxy server that forwards GCode commands
 # from TCP clients to USB serial devices.
 #
@@ -16,13 +16,13 @@ server:
   # TCP server port
   # Environment variable: SERVER_PORT
   port: 8080
-  
+
   # TCP server bind address
   # Use 0.0.0.0 to listen on all interfaces
   # Use 127.0.0.1 to only accept local connections
   # Environment variable: SERVER_ADDRESS
   address: 0.0.0.0
-  
+
   # Maximum number of commands allowed in the queue
   # When the queue reaches this limit, new commands are rejected with an error
   # Environment variable: SERVER_QUEUE_LIMIT
@@ -33,21 +33,21 @@ device:
   # Find your device ID using: lsusb (Linux) or Device Manager (Windows)
   # Environment variable: DEVICE_USB_ID
   usb-id: 303a:4001
-  
+
   # Device path as alternative to usb-id, overrides usb-id
   # Environment variable: DEVICE_DEV_PATH
   #path: /dev/ttyACM0
-  
+
   # Serial baud rate for the USB device
   # Common values: 9600, 19200, 38400, 57600, 115200, 250000
   # Environment variable: DEVICE_BAUD_RATE
   baud-rate: 115200
-  
+
   # Device initialization delay in seconds
   # Some devices need time to initialize after connection
   # Environment variable: DEVICE_SERIAL_DELAY
   serial-delay: 0.1
-  
+
   # Timeout in seconds for waiting for device response
   # Increase this value if your device needs more time to respond to commands
   # Environment variable: DEVICE_RESPONSE_TIMEOUT
@@ -73,25 +73,40 @@ gcode-log-file: gcode.log
 # All trigger execution is asynchronous and non-blocking
 # See TRIGGERS.md for detailed documentation
 custom-triggers:
-  # Trigger behavior modes:
-  #   forward (default): Send gcode to device, execute trigger async, return device response
-  #   capture: Don't send gcode to device, execute trigger, return fake response (ok or error)
-  #   capture-nowait: Don't send gcode to device, execute trigger async, return ok immediately
+  # Trigger Template:
+
+  # - id: air-assist-on # -- trigger name for logging
+  #   trigger:
+  #     type: gcode # -- trigger type (only gcode for now)
+  #     match: M8 # -- regex pattern to match on gcode occurrence
+ 
+  #     behavior: "" # -- [ forward | capture | capture-nowait ]
+  ##      -- forward: Send gcode to device, execute trigger async, return device response
+  ##      -- capture (default): Don't send gcode to device, execute trigger, return fake response (ok or error)
+  ##      -- capture-nowait: Don't send gcode to device, execute trigger async, return ok immediately
   
+  #     synchronize: false # -- whether to force execution timing synchronization (default: false)
+  #       -- If true, the trigger injects a `G4 P0` command to the device and waits for a response 
+  #          before executing the trigger. This forces all prior commands in the device device buffer
+  #          to finish before trigger command execution.
+
+  #   command: "" # -- shell command to execute on trigger
+
   # Example: Air assist on (M8 command)
   - id: air-assist-on
     trigger:
       type: gcode
       match: M8
     command: "hass-cli service call homeassistant.turn_on --arguments entity_id=switch.laser_air_assist"
-  
+
   # Example: Air assist off (M9 command)
   - id: air-assist-off
     trigger:
       type: gcode
       match: M9
+      synchronize: true
     command: "hass-cli service call homeassistant.turn_off --arguments entity_id=switch.laser_air_assist"
-    
+
   # Example: Air vent on (M7 command)
   - id: air-vent-on
     trigger:
@@ -103,5 +118,6 @@ custom-triggers:
   - id: air-vent-off
     trigger:
       type: gcode
-      match: M7\.1|M9
+      match: M7\.1
+      synchronize: true
     command: "hass-cli service call homeassistant.turn_off --arguments entity_id=fan.laser_vent"

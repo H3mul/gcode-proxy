@@ -20,6 +20,7 @@ from .handlers import (
     GCodeHandler,
     ResponseHandler,
 )
+from .trigger_manager import MultiTriggerExecutionResult
 from .utils import (
     SerialConnectionError,
     clean_grbl_response,
@@ -174,17 +175,44 @@ class GCodeDevice:
         except asyncio.CancelledError:
             logger.info("Device task loop stopped")
 
+    async def _synchronize_device(self) -> str:
+        """
+        Inject a synchronization command to force device buffer completion.
+        
+        Sends a G4 P0 (dwell with 0 duration) command to the device and waits
+        for the response. This forces all prior commands in the device buffer
+        to complete before returning.
+        
+        Returns:
+            The device response to the synchronization command.
+            
+        Raises:
+            asyncio.TimeoutError: If the device doesn't respond in time.
+            SerialConnectionError: If the serial connection is not available.
+        """
+        sync_command = "G4 P0\n"
+        logger.debug("Injecting synchronization command: G4 P0")
+        
+        await self._log_gcode(sync_command, "sync injection to device")
+        await self._send(sync_command)
+        sync_response = await self._receive()
+        await self._log_gcode(sync_response, "device sync response")
+        
+        logger.debug(f"Synchronization response: {sync_response.strip()}")
+        return sync_response
+
     async def _process_task(self, task: "Task") -> None:
         """
         Process a single task.
 
-        Calls the GCode handler and waits for it to complete. The handler may
-        match one or more triggers that decide whether the GCode should be
-        forwarded to the device or intercepted. Multiple triggers can match
-        with different behaviors:
+        Calls the GCode handler (pre-phase) to match triggers and execute those
+        that don't require synchronization. If synchronization is needed, injects
+        G4 P0 command and then calls the handler (post-phase) to execute deferred
+        triggers. Multiple triggers can match with different behaviors:
         - If ANY trigger is FORWARD, GCode is sent to device
         - If ALL triggers are CAPTURE, GCode is not sent to device
         - Responses are merged based on trigger execution results
+        - If ANY trigger has synchronize flag, a G4 P0 is injected before execution
 
         Args:
             task: The task to process.
@@ -196,55 +224,66 @@ class GCodeDevice:
             gcode += "\n"
 
         try:
-            # Call the GCode handler and wait for it to complete
-            # For triggers, this executes all matching triggers and returns
-            # behavior metadata and aggregated results
-            handler_result = await self.gcode_handler.on_gcode(gcode, client_address)
-
-            # Log the GCode command
             source_address = f"{client_address[0]}:{client_address[1]}"
-            await self._log_gcode(task.command, source_address)
+            
+            # Pre-phase: Call the GCode handler and get behavior config
+            handler_result = await self.gcode_handler.on_gcode_pre(gcode, client_address)
 
             # Determine whether to send GCode to device based on trigger behavior
             should_forward = True
             fake_response = None
-            aggregated_result = None
+            should_synchronize = False
+            
+            if handler_result:
+                should_forward = handler_result.should_forward
+                fake_response = handler_result.fake_response
+                should_synchronize = handler_result.should_synchronize
 
-            if handler_result and isinstance(handler_result, dict):
-                should_forward = handler_result.get('should_forward', True)
-                fake_response = handler_result.get('fake_response')
-                aggregated_result = handler_result.get('all_results')
+            # If synchronization is needed, inject G4 P0 before proceeding
+            if should_synchronize:
+                try:
+                    logger.info("Starting device synchronization")
+                    await self._synchronize_device()
+                    logger.info("Device synchronization complete")
+                except asyncio.TimeoutError:
+                    logger.warning("Timeout during device synchronization")
+                    raise
+                except Exception as e:
+                    logger.error(f"Error during device synchronization: {e}")
+                    raise
+                
+                post_result = await self.gcode_handler.on_gcode_post(gcode, client_address)
+                
+                if post_result:
+                    # Merge pre and post responses
+                    if fake_response == "ok":
+                        fake_response = post_result
+                    else:
+                        fake_response = f"{fake_response} {post_result}"
 
             if not should_forward:
                 # All triggers captured the command, don't send to device
                 response = fake_response or 'ok'
                 logger.debug(f"All triggers captured command, returning: {response}")
+                await self._log_gcode(task.command, source_address, "not forwarded to device")
+                await self._log_gcode(response, "trigger response")
             else:
+                await self._log_gcode(task.command, source_address, "forwarded to device")
+
                 # Send to device and wait for response
                 await self._send(gcode)
-
-                # Immediately listen for response, in case we miss it
-                receive_task = asyncio.create_task(self._receive())
-
                 logger.debug(f"Sent: {gcode.strip()}")
-
-                device_response = await receive_task
-
+                
+                device_response = await self._receive()
                 logger.debug(f"Received: {device_response.strip()}")
+                await self._log_gcode(device_response, "device response")
 
-                # Merge device response with trigger results if there are triggers
-                if aggregated_result is not None:
-                    response = aggregated_result.get_response(
-                        device_response=device_response
-                    )
-                else:
-                    response = device_response
+                response = device_response
 
             # Set the response on the task
             task.set_response(response)
 
             # Log the response
-            await self._log_gcode(response, "device")
 
             # Notify response handler and wait for it to complete
             await self.response_handler.on_response(response, gcode, client_address)
@@ -298,7 +337,7 @@ class GCodeDevice:
             logger.error(f"Failed to initialize log file {self.gcode_log_file}: {e}")
             self.gcode_log_file = None
 
-    async def _log_gcode(self, gcode: str, source: str) -> None:
+    async def _log_gcode(self, gcode: str, source: str, message: str = "") -> None:
         """
         Log a GCode command or response to the log file.
 
@@ -312,7 +351,9 @@ class GCodeDevice:
         try:
             # Format: [timestamp][source]: message
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            log_entry = f"{timestamp} - {source}: {gcode.strip()}"
+            if message:
+                message = f" [{message}]"
+            log_entry = f"{timestamp} - {source}{message}: {gcode.strip()}"
 
             async with self._log_lock:
                 with open(self.gcode_log_file, "a", encoding="utf-8") as f:
