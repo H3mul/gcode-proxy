@@ -6,12 +6,12 @@ trigger execution.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.gcode_proxy.device import GCodeDevice
-from src.gcode_proxy.handlers import DefaultGCodeHandler, DefaultResponseHandler
+from src.gcode_proxy.handlers import DefaultGCodeHandler, DefaultResponseHandler, GCodeHandlerPreResponse
 from src.gcode_proxy.task_queue import Task, TaskQueue
 from src.gcode_proxy.trigger_manager import TriggerManager
 from src.gcode_proxy.triggers_config import (
@@ -240,21 +240,115 @@ class TestDeviceSynchronization:
         )
         trigger_manager = TriggerManager([trigger_config])
         
-        # Call on_gcode with matching command
-        result = await trigger_manager.on_gcode("M9\n", ("127.0.0.1", 1234))
+        # Call on_gcode_pre with matching command
+        result = await trigger_manager.on_gcode_pre("M9\n", ("127.0.0.1", 1234))
         
         # Verify result includes synchronize flag
-        assert "should_synchronize" in result
-        assert result["should_synchronize"] is True
+        assert result is not None
+        assert isinstance(result, GCodeHandlerPreResponse)
+        assert result.should_synchronize is True
 
     @pytest.mark.asyncio
     async def test_handler_result_synchronize_false_by_default(self):
         """Test that handler result has synchronize=False when not set."""
         trigger_manager = TriggerManager()
         
-        # Call on_gcode with non-matching command
-        result = await trigger_manager.on_gcode("G28\n", ("127.0.0.1", 1234))
+        # Call on_gcode_pre with non-matching command
+        result = await trigger_manager.on_gcode_pre("G28\n", ("127.0.0.1", 1234))
         
         # Verify result has synchronize flag as False
-        assert "should_synchronize" in result
-        assert result["should_synchronize"] is False
+        assert result is not None
+        assert result.should_synchronize is False
+
+    @pytest.mark.asyncio
+    async def test_handler_detects_sync_from_matching_triggers(self):
+        """Test that handler correctly detects need for sync from matching triggers."""
+        configs = [
+            CustomTriggerConfig(
+                id="pre-no-sync",
+                trigger=GCodeTriggerConfig(
+                    type="gcode",
+                    match="M[89]",
+                    behavior=TriggerBehavior.CAPTURE,
+                    synchronize=False,
+                ),
+                command="exit 0",
+            ),
+            CustomTriggerConfig(
+                id="post-with-sync",
+                trigger=GCodeTriggerConfig(
+                    type="gcode",
+                    match="M9",
+                    behavior=TriggerBehavior.CAPTURE,
+                    synchronize=True,
+                ),
+                command="exit 0",
+            ),
+        ]
+        trigger_manager = TriggerManager(configs)
+        
+        # M8 only matches pre-trigger (no sync needed)
+        result_m8 = await trigger_manager.on_gcode_pre("M8\n", ("127.0.0.1", 1234))
+        assert result_m8.should_synchronize is False
+        
+        # M9 matches both, post-trigger has sync (sync needed)
+        result_m9 = await trigger_manager.on_gcode_pre("M9\n", ("127.0.0.1", 1234))
+        assert result_m9.should_synchronize is True
+
+    @pytest.mark.asyncio
+    async def test_non_matching_gcode_no_synchronize(self):
+        """Test that non-matching GCode doesn't trigger synchronization."""
+        configs = [
+            CustomTriggerConfig(
+                id="m8-trigger",
+                trigger=GCodeTriggerConfig(
+                    type="gcode",
+                    match="M8",
+                    behavior=TriggerBehavior.CAPTURE,
+                    synchronize=False,
+                ),
+                command="exit 0",
+            ),
+        ]
+        trigger_manager = TriggerManager(configs)
+        
+        # G28 doesn't match, so no sync needed
+        result = await trigger_manager.on_gcode_pre("G28\n", ("127.0.0.1", 1234))
+        assert result.should_synchronize is False
+
+    @pytest.mark.asyncio
+    async def test_capture_behavior_with_sync_prevents_forward(self):
+        """Test that CAPTURE+sync prevents device communication until post-phase."""
+        task_queue = TaskQueue()
+        device = GCodeDevice(task_queue=task_queue)
+        
+        trigger_config = CustomTriggerConfig(
+            id="sync-capture",
+            trigger=GCodeTriggerConfig(
+                type="gcode",
+                match="M9",
+                behavior=TriggerBehavior.CAPTURE,
+                synchronize=True,
+            ),
+            command="exit 0",
+        )
+        trigger_manager = TriggerManager([trigger_config])
+        device.gcode_handler = trigger_manager
+        
+        # Mock device methods
+        device._send = AsyncMock()
+        device._receive = AsyncMock(return_value="ok\n")
+        device._log_gcode = AsyncMock()
+        device.response_handler.on_response = AsyncMock()
+        
+        # Process the task
+        mock_writer = MagicMock()
+        task = Task("M9\n", ("127.0.0.1", 1234), mock_writer)
+        await device._process_task(task)
+        
+        # The M9 command should eventually be sent (after sync),
+        # but not before the sync command
+        send_calls = device._send.call_args_list
+        assert len(send_calls) >= 2
+        assert send_calls[0][0][0] == "G4 P0\n"
+        assert send_calls[1][0][0] == "M9\n"

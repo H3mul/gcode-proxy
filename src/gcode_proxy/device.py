@@ -20,7 +20,6 @@ from .handlers import (
     GCodeHandler,
     ResponseHandler,
 )
-from .trigger_manager import MultiTriggerExecutionResult
 from .utils import (
     SerialConnectionError,
     clean_grbl_response,

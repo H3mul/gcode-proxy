@@ -7,8 +7,7 @@ from src.gcode_proxy.handlers import (
     ResponseHandler,
     DefaultGCodeHandler,
     DefaultResponseHandler,
-    CallbackGCodeHandler,
-    CallbackResponseHandler,
+    GCodeHandlerPreResponse,
 )
 
 
@@ -21,23 +20,24 @@ class TestDefaultGCodeHandler:
         return DefaultGCodeHandler()
 
     @pytest.mark.asyncio
-    async def test_on_gcode_received_passes_through(self, handler):
-        """Test that on_gcode_received passes through the gcode unchanged."""
+    async def test_on_gcode_pre_returns_none(self, handler):
+        """Test that on_gcode_pre returns None for default behavior."""
         gcode = "G28 X Y Z"
         client_address = ("127.0.0.1", 12345)
         
-        result = await handler.on_gcode_received(gcode, client_address)
+        result = await handler.on_gcode_pre(gcode, client_address)
         
-        assert result == gcode
+        assert result is None
 
     @pytest.mark.asyncio
-    async def test_on_gcode_sent_does_nothing(self, handler):
-        """Test that on_gcode_sent completes without error."""
+    async def test_on_gcode_post_returns_none(self, handler):
+        """Test that on_gcode_post returns None."""
         gcode = "G28 X Y Z"
         client_address = ("127.0.0.1", 12345)
         
-        # Should not raise
-        await handler.on_gcode_sent(gcode, client_address)
+        result = await handler.on_gcode_post(gcode, client_address)
+        
+        assert result is None
 
 
 class TestDefaultResponseHandler:
@@ -49,231 +49,270 @@ class TestDefaultResponseHandler:
         return DefaultResponseHandler()
 
     @pytest.mark.asyncio
-    async def test_on_response_received_passes_through(self, handler):
-        """Test that on_response_received passes through the response unchanged."""
+    async def test_on_response_does_nothing(self, handler):
+        """Test that on_response completes without error."""
         response = "ok"
-        original_gcode = "G28"
-        client_address = ("127.0.0.1", 12345)
-        
-        result = await handler.on_response_received(response, original_gcode, client_address)
-        
-        assert result == response
-
-    @pytest.mark.asyncio
-    async def test_on_response_sent_does_nothing(self, handler):
-        """Test that on_response_sent completes without error."""
-        response = "ok"
-        client_address = ("127.0.0.1", 12345)
-        
-        # Should not raise
-        await handler.on_response_sent(response, client_address)
-
-
-class TestCallbackGCodeHandler:
-    """Tests for CallbackGCodeHandler."""
-
-    @pytest.mark.asyncio
-    async def test_with_no_callbacks(self):
-        """Test handler works with no callbacks provided."""
-        handler = CallbackGCodeHandler()
         gcode = "G28"
         client_address = ("127.0.0.1", 12345)
         
-        result = await handler.on_gcode_received(gcode, client_address)
-        assert result == gcode
-        
         # Should not raise
-        await handler.on_gcode_sent(gcode, client_address)
-
-    @pytest.mark.asyncio
-    async def test_on_received_callback_is_called(self):
-        """Test that on_received callback is invoked."""
-        received_data = []
-        
-        async def on_received(gcode: str, client_address: tuple[str, int]) -> str:
-            received_data.append((gcode, client_address))
-            return f"modified_{gcode}"
-        
-        handler = CallbackGCodeHandler(on_received=on_received)
-        gcode = "G28"
-        client_address = ("127.0.0.1", 12345)
-        
-        result = await handler.on_gcode_received(gcode, client_address)
-        
-        assert result == "modified_G28"
-        assert received_data == [(gcode, client_address)]
-
-    @pytest.mark.asyncio
-    async def test_on_sent_callback_is_called(self):
-        """Test that on_sent callback is invoked."""
-        sent_data = []
-        
-        async def on_sent(gcode: str, client_address: tuple[str, int]) -> None:
-            sent_data.append((gcode, client_address))
-        
-        handler = CallbackGCodeHandler(on_sent=on_sent)
-        gcode = "G28"
-        client_address = ("127.0.0.1", 12345)
-        
-        await handler.on_gcode_sent(gcode, client_address)
-        
-        assert sent_data == [(gcode, client_address)]
-
-
-class TestCallbackResponseHandler:
-    """Tests for CallbackResponseHandler."""
-
-    @pytest.mark.asyncio
-    async def test_with_no_callbacks(self):
-        """Test handler works with no callbacks provided."""
-        handler = CallbackResponseHandler()
-        response = "ok"
-        original_gcode = "G28"
-        client_address = ("127.0.0.1", 12345)
-        
-        result = await handler.on_response_received(response, original_gcode, client_address)
-        assert result == response
-        
-        # Should not raise
-        await handler.on_response_sent(response, client_address)
-
-    @pytest.mark.asyncio
-    async def test_on_received_callback_is_called(self):
-        """Test that on_received callback is invoked."""
-        received_data = []
-        
-        async def on_received(
-            response: str, original_gcode: str, client_address: tuple[str, int]
-        ) -> str:
-            received_data.append((response, original_gcode, client_address))
-            return f"modified_{response}"
-        
-        handler = CallbackResponseHandler(on_received=on_received)
-        response = "ok"
-        original_gcode = "G28"
-        client_address = ("127.0.0.1", 12345)
-        
-        result = await handler.on_response_received(response, original_gcode, client_address)
-        
-        assert result == "modified_ok"
-        assert received_data == [(response, original_gcode, client_address)]
-
-    @pytest.mark.asyncio
-    async def test_on_sent_callback_is_called(self):
-        """Test that on_sent callback is invoked."""
-        sent_data = []
-        
-        async def on_sent(response: str, client_address: tuple[str, int]) -> None:
-            sent_data.append((response, client_address))
-        
-        handler = CallbackResponseHandler(on_sent=on_sent)
-        response = "ok"
-        client_address = ("127.0.0.1", 12345)
-        
-        await handler.on_response_sent(response, client_address)
-        
-        assert sent_data == [(response, client_address)]
+        await handler.on_response(response, gcode, client_address)
 
 
 class TestCustomGCodeHandler:
     """Tests for creating custom GCode handlers by subclassing."""
 
     @pytest.mark.asyncio
-    async def test_custom_handler_can_modify_gcode(self):
-        """Test that a custom handler can modify gcode commands."""
+    async def test_custom_handler_can_return_response(self):
+        """Test that a custom handler can return GCodeHandlerPreResponse."""
         
-        class UppercaseHandler(GCodeHandler):
-            async def on_gcode_received(
+        class CustomHandler(GCodeHandler):
+            async def on_gcode_pre(
                 self, gcode: str, client_address: tuple[str, int]
-            ) -> str:
-                return gcode.upper()
+            ) -> GCodeHandlerPreResponse | None:
+                if gcode.strip() == "G28":
+                    return GCodeHandlerPreResponse(
+                        should_forward=False,
+                        fake_response="ok",
+                        should_synchronize=False,
+                    )
+                return None
             
-            async def on_gcode_sent(
+            async def on_gcode_post(
                 self, gcode: str, client_address: tuple[str, int]
-            ) -> None:
-                pass
+            ) -> str | None:
+                return None
         
-        handler = UppercaseHandler()
-        result = await handler.on_gcode_received("g28 x y z", ("127.0.0.1", 12345))
+        handler = CustomHandler()
+        result = await handler.on_gcode_pre("G28", ("127.0.0.1", 12345))
         
-        assert result == "G28 X Y Z"
+        assert result is not None
+        assert result.should_forward is False
+        assert result.fake_response == "ok"
+        assert result.should_synchronize is False
 
     @pytest.mark.asyncio
     async def test_custom_handler_can_filter_gcode(self):
-        """Test that a custom handler can filter gcode commands."""
+        """Test that a custom handler can filter certain GCode."""
         
         class FilterHandler(GCodeHandler):
-            async def on_gcode_received(
+            async def on_gcode_pre(
                 self, gcode: str, client_address: tuple[str, int]
-            ) -> str:
-                # Strip comments
-                if ";" in gcode:
-                    return gcode.split(";")[0].strip()
-                return gcode
+            ) -> GCodeHandlerPreResponse | None:
+                # Block M112 (emergency stop)
+                if "M112" in gcode:
+                    return GCodeHandlerPreResponse(
+                        should_forward=False,
+                        fake_response="error: M112 blocked",
+                        should_synchronize=False,
+                    )
+                return None
             
-            async def on_gcode_sent(
+            async def on_gcode_post(
                 self, gcode: str, client_address: tuple[str, int]
-            ) -> None:
-                pass
+            ) -> str | None:
+                return None
         
         handler = FilterHandler()
-        result = await handler.on_gcode_received("G28 ; home all axes", ("127.0.0.1", 12345))
         
-        assert result == "G28"
+        # M112 should be blocked
+        result = await handler.on_gcode_pre("M112", ("127.0.0.1", 12345))
+        assert result is not None
+        assert result.should_forward is False
+        
+        # Other commands should pass through
+        result = await handler.on_gcode_pre("G28", ("127.0.0.1", 12345))
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_custom_handler_can_set_synchronize(self):
+        """Test that a custom handler can set synchronize flag."""
+        
+        class SyncHandler(GCodeHandler):
+            async def on_gcode_pre(
+                self, gcode: str, client_address: tuple[str, int]
+            ) -> GCodeHandlerPreResponse | None:
+                if gcode.strip().startswith("M104"):
+                    # Require synchronization for temperature commands
+                    return GCodeHandlerPreResponse(
+                        should_forward=True,
+                        fake_response=None,
+                        should_synchronize=True,
+                    )
+                return None
+            
+            async def on_gcode_post(
+                self, gcode: str, client_address: tuple[str, int]
+            ) -> str | None:
+                return None
+        
+        handler = SyncHandler()
+        result = await handler.on_gcode_pre("M104 S200", ("127.0.0.1", 12345))
+        
+        assert result is not None
+        assert result.should_synchronize is True
 
 
 class TestCustomResponseHandler:
     """Tests for creating custom response handlers by subclassing."""
 
     @pytest.mark.asyncio
-    async def test_custom_handler_can_modify_response(self):
-        """Test that a custom handler can modify responses."""
-        
-        class AnnotatedResponseHandler(ResponseHandler):
-            async def on_response_received(
-                self, response: str, original_gcode: str, client_address: tuple[str, int]
-            ) -> str:
-                return f"[{original_gcode}] {response}"
-            
-            async def on_response_sent(
-                self, response: str, client_address: tuple[str, int]
-            ) -> None:
-                pass
-        
-        handler = AnnotatedResponseHandler()
-        result = await handler.on_response_received("ok", "G28", ("127.0.0.1", 12345))
-        
-        assert result == "[G28] ok"
-
-    @pytest.mark.asyncio
     async def test_custom_handler_can_track_responses(self):
-        """Test that a custom handler can track responses for logging."""
+        """Test that a custom handler can track responses."""
         
         class TrackingResponseHandler(ResponseHandler):
             def __init__(self):
                 self.history = []
             
-            async def on_response_received(
-                self, response: str, original_gcode: str, client_address: tuple[str, int]
-            ) -> str:
+            async def on_response(
+                self, response: str, gcode: str, client_address: tuple[str, int]
+            ) -> None:
                 self.history.append({
                     "response": response,
-                    "gcode": original_gcode,
+                    "gcode": gcode,
                     "client": client_address,
                 })
-                return response
-            
-            async def on_response_sent(
-                self, response: str, client_address: tuple[str, int]
-            ) -> None:
-                pass
         
         handler = TrackingResponseHandler()
         client = ("127.0.0.1", 12345)
         
-        await handler.on_response_received("ok", "G28", client)
-        await handler.on_response_received("ok T:200.0", "M105", client)
+        await handler.on_response("ok", "G28", client)
+        await handler.on_response("ok T:200.0", "M105", client)
         
         assert len(handler.history) == 2
         assert handler.history[0]["gcode"] == "G28"
         assert handler.history[1]["gcode"] == "M105"
+
+    @pytest.mark.asyncio
+    async def test_custom_handler_can_log_errors(self):
+        """Test that a custom handler can log error responses."""
+        
+        class ErrorTrackingHandler(ResponseHandler):
+            def __init__(self):
+                self.errors = []
+            
+            async def on_response(
+                self, response: str, gcode: str, client_address: tuple[str, int]
+            ) -> None:
+                if response.startswith("error"):
+                    self.errors.append({
+                        "response": response,
+                        "gcode": gcode,
+                        "client": client_address,
+                    })
+        
+        handler = ErrorTrackingHandler()
+        
+        await handler.on_response("ok", "G28", ("127.0.0.1", 12345))
+        await handler.on_response("error: something", "M8", ("127.0.0.1", 12345))
+        await handler.on_response("ok", "G1 X10", ("127.0.0.1", 12345))
+        
+        assert len(handler.errors) == 1
+        assert handler.errors[0]["gcode"] == "M8"
+
+
+class TestGCodeHandlerPreResponse:
+    """Tests for the GCodeHandlerPreResponse dataclass."""
+
+    def test_create_with_all_fields(self):
+        """Test creating a response with all fields."""
+        response = GCodeHandlerPreResponse(
+            should_forward=True,
+            fake_response="ok",
+            should_synchronize=True,
+        )
+        
+        assert response.should_forward is True
+        assert response.fake_response == "ok"
+        assert response.should_synchronize is True
+
+    def test_create_with_none_fake_response(self):
+        """Test creating a response with None fake_response."""
+        response = GCodeHandlerPreResponse(
+            should_forward=True,
+            fake_response=None,
+            should_synchronize=False,
+        )
+        
+        assert response.fake_response is None
+
+    def test_create_capture_response(self):
+        """Test creating a CAPTURE-style response."""
+        response = GCodeHandlerPreResponse(
+            should_forward=False,
+            fake_response="ok",
+            should_synchronize=False,
+        )
+        
+        assert response.should_forward is False
+        assert response.fake_response is not None
+        assert response.should_synchronize is False
+
+    def test_create_forward_response(self):
+        """Test creating a FORWARD-style response."""
+        response = GCodeHandlerPreResponse(
+            should_forward=True,
+            fake_response=None,
+            should_synchronize=False,
+        )
+        
+        assert response.should_forward is True
+        assert response.fake_response is None
+        assert response.should_synchronize is False
+
+    def test_create_synchronize_response(self):
+        """Test creating a response that requires synchronization."""
+        response = GCodeHandlerPreResponse(
+            should_forward=True,
+            fake_response=None,
+            should_synchronize=True,
+        )
+        
+        assert response.should_synchronize is True
+
+
+class TestHandlerIntegration:
+    """Integration tests for handlers working together."""
+
+    @pytest.mark.asyncio
+    async def test_gcode_handler_and_response_handler_together(self):
+        """Test that GCode and Response handlers work together."""
+        
+        class TrackingGCodeHandler(GCodeHandler):
+            def __init__(self):
+                self.commands = []
+            
+            async def on_gcode_pre(
+                self, gcode: str, client_address: tuple[str, int]
+            ) -> GCodeHandlerPreResponse | None:
+                self.commands.append(gcode)
+                return None
+            
+            async def on_gcode_post(
+                self, gcode: str, client_address: tuple[str, int]
+            ) -> str | None:
+                return None
+        
+        class TrackingResponseHandler(ResponseHandler):
+            def __init__(self):
+                self.responses = []
+            
+            async def on_response(
+                self, response: str, gcode: str, client_address: tuple[str, int]
+            ) -> None:
+                self.responses.append(response)
+        
+        gcode_handler = TrackingGCodeHandler()
+        response_handler = TrackingResponseHandler()
+        
+        # Simulate processing
+        await gcode_handler.on_gcode_pre("G28", ("127.0.0.1", 12345))
+        await response_handler.on_response("ok", "G28", ("127.0.0.1", 12345))
+        
+        await gcode_handler.on_gcode_pre("M104 S200", ("127.0.0.1", 12345))
+        await response_handler.on_response("ok", "M104 S200", ("127.0.0.1", 12345))
+        
+        assert len(gcode_handler.commands) == 2
+        assert len(response_handler.responses) == 2
+        assert gcode_handler.commands[0] == "G28"
+        assert response_handler.responses[0] == "ok"

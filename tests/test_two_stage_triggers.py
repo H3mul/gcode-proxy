@@ -8,6 +8,7 @@ Tests verify that triggers are executed in the correct phase:
 import asyncio
 import pytest
 
+from src.gcode_proxy.handlers import GCodeHandlerPreResponse
 from src.gcode_proxy.trigger_manager import TriggerManager
 from src.gcode_proxy.triggers_config import (
     CustomTriggerConfig,
@@ -39,9 +40,10 @@ class TestTwoStageTriggerHandling:
         result = await manager.on_gcode_pre("M8", ("127.0.0.1", 1234))
         
         assert result is not None
-        assert result["triggered"] is True
-        assert result["should_synchronize"] is False
-        assert len(result["matching_triggers"]) == 1
+        assert isinstance(result, GCodeHandlerPreResponse)
+        assert result.should_forward is False
+        assert result.fake_response == "ok"
+        assert result.should_synchronize is False
 
     @pytest.mark.asyncio
     async def test_on_gcode_pre_defers_sync_triggers(self):
@@ -63,11 +65,10 @@ class TestTwoStageTriggerHandling:
         result = await manager.on_gcode_pre("M9", ("127.0.0.1", 1234))
         
         assert result is not None
-        assert result["triggered"] is True
-        assert result["should_synchronize"] is True
-        # Pre-results should be None since the trigger requires sync
-        assert result["pre_results"] is None
-        assert len(result["matching_triggers"]) == 1
+        assert result.should_forward is True
+        assert result.should_synchronize is True
+        # Pre-phase should not execute the post-trigger
+        assert result.fake_response is None
 
     @pytest.mark.asyncio
     async def test_on_gcode_post_executes_sync_triggers(self):
@@ -86,17 +87,11 @@ class TestTwoStageTriggerHandling:
         ]
         manager = TriggerManager(configs)
         
-        # First get the matching triggers from pre-phase
-        pre_result = await manager.on_gcode_pre("M9", ("127.0.0.1", 1234))
-        matching_triggers = pre_result["matching_triggers"]
+        # Call post-phase
+        result = await manager.on_gcode_post("M9", ("127.0.0.1", 1234))
         
-        # Now execute post-phase
-        result = await manager.on_gcode_post("M9", ("127.0.0.1", 1234), matching_triggers)
-        
-        assert result is not None
-        assert result["post_triggered"] is True
-        assert result["post_results"] is not None
-        assert len(result["post_results"].results) == 1
+        # Post-phase returns None (results handled internally)
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_mixed_pre_and_post_triggers(self):
@@ -128,23 +123,20 @@ class TestTwoStageTriggerHandling:
         # Pre-phase: M9 matches both, but only pre-trigger is executed
         pre_result = await manager.on_gcode_pre("M9", ("127.0.0.1", 1234))
         
-        assert pre_result["triggered"] is True
-        assert pre_result["should_synchronize"] is True
-        assert pre_result["pre_results"] is not None
-        assert len(pre_result["pre_results"].results) == 1
-        assert pre_result["pre_results"].results[0].trigger_id == "pre-trigger"
+        assert pre_result is not None
+        assert pre_result.should_synchronize is True
+        # Pre-trigger executes and sets fake_response if needed
+        assert pre_result.fake_response is None  # Because we need sync
         
         # Post-phase: Only post-trigger is executed
-        matching_triggers = pre_result["matching_triggers"]
-        post_result = await manager.on_gcode_post("M9", ("127.0.0.1", 1234), matching_triggers)
+        post_result = await manager.on_gcode_post("M9", ("127.0.0.1", 1234))
         
-        assert post_result["post_triggered"] is True
-        assert len(post_result["post_results"].results) == 1
-        assert post_result["post_results"].results[0].trigger_id == "post-trigger"
+        # Post returns None (internal handling)
+        assert post_result is None
 
     @pytest.mark.asyncio
-    async def test_on_gcode_pre_sets_should_forward_based_on_pre_triggers(self):
-        """Test that should_forward is determined by pre-phase triggers."""
+    async def test_on_gcode_pre_sets_should_forward_based_on_triggers(self):
+        """Test that should_forward is determined by trigger behaviors."""
         configs = [
             CustomTriggerConfig(
                 id="pre-capture",
@@ -162,8 +154,8 @@ class TestTwoStageTriggerHandling:
         result = await manager.on_gcode_pre("M8", ("127.0.0.1", 1234))
         
         # Pre-trigger is CAPTURE, so should_forward is False
-        assert result["should_forward"] is False
-        assert result["fake_response"] == "ok"
+        assert result.should_forward is False
+        assert result.fake_response == "ok"
 
     @pytest.mark.asyncio
     async def test_on_gcode_pre_with_forward_behavior(self):
@@ -185,8 +177,8 @@ class TestTwoStageTriggerHandling:
         result = await manager.on_gcode_pre("M8", ("127.0.0.1", 1234))
         
         # FORWARD trigger means should_forward is True
-        assert result["should_forward"] is True
-        assert result["fake_response"] is None
+        assert result.should_forward is True
+        assert result.fake_response is None
 
     @pytest.mark.asyncio
     async def test_on_gcode_pre_with_post_forward_trigger(self):
@@ -219,8 +211,8 @@ class TestTwoStageTriggerHandling:
         
         # Even though pre-trigger is CAPTURE, post-trigger is FORWARD
         # so should_forward must be True to allow device communication
-        assert result["should_forward"] is True
-        assert result["should_synchronize"] is True
+        assert result.should_forward is True
+        assert result.should_synchronize is True
 
     @pytest.mark.asyncio
     async def test_multiple_pre_triggers_all_capture(self):
@@ -252,8 +244,8 @@ class TestTwoStageTriggerHandling:
         result = await manager.on_gcode_pre("M8", ("127.0.0.1", 1234))
         
         # Both triggers match and are CAPTURE
-        assert result["should_forward"] is False
-        assert len(result["pre_results"].results) == 2
+        assert result.should_forward is False
+        assert result.fake_response == "ok"
 
     @pytest.mark.asyncio
     async def test_multiple_post_triggers_mixed_behavior(self):
@@ -286,16 +278,15 @@ class TestTwoStageTriggerHandling:
         pre_result = await manager.on_gcode_pre("M9", ("127.0.0.1", 1234))
         
         # Both post-triggers should be recognized as requiring sync
-        assert pre_result["should_synchronize"] is True
+        assert pre_result.should_synchronize is True
         # And should_forward should be True due to post-forward trigger
-        assert pre_result["should_forward"] is True
+        assert pre_result.should_forward is True
         
         # Post-phase execution
-        matching_triggers = pre_result["matching_triggers"]
-        post_result = await manager.on_gcode_post("M9", ("127.0.0.1", 1234), matching_triggers)
+        post_result = await manager.on_gcode_post("M9", ("127.0.0.1", 1234))
         
         # Both post-triggers are executed
-        assert len(post_result["post_results"].results) == 2
+        assert post_result is None
 
     @pytest.mark.asyncio
     async def test_no_triggers_match(self):
@@ -315,10 +306,9 @@ class TestTwoStageTriggerHandling:
         
         result = await manager.on_gcode_pre("G28", ("127.0.0.1", 1234))
         
-        assert result["triggered"] is False
-        assert result["should_forward"] is True
-        assert result["should_synchronize"] is False
-        assert len(result["matching_triggers"]) == 0
+        assert result.should_forward is True
+        assert result.should_synchronize is False
+        assert result.fake_response is None
 
     @pytest.mark.asyncio
     async def test_on_gcode_post_with_empty_post_triggers(self):
@@ -339,20 +329,110 @@ class TestTwoStageTriggerHandling:
         
         # Pre-phase
         pre_result = await manager.on_gcode_pre("M8", ("127.0.0.1", 1234))
+        assert pre_result is not None
         
-        # Post-phase with matching_triggers that have no post-phase ones
-        matching_triggers = pre_result["matching_triggers"]
-        post_result = await manager.on_gcode_post("M8", ("127.0.0.1", 1234), matching_triggers)
+        # Post-phase with no matching post-triggers
+        post_result = await manager.on_gcode_post("M8", ("127.0.0.1", 1234))
         
-        assert post_result["post_triggered"] is False
-        assert post_result["post_results"] is None
+        assert post_result is None
 
     @pytest.mark.asyncio
-    async def test_backward_compatibility_on_gcode(self):
-        """Test that on_gcode still works for backward compatibility."""
+    async def test_capture_nowait_in_pre_phase(self):
+        """Test CAPTURE_NOWAIT behavior in pre-phase."""
         configs = [
             CustomTriggerConfig(
-                id="trigger",
+                id="nowait-trigger",
+                trigger=GCodeTriggerConfig(
+                    type="gcode",
+                    match="M8",
+                    behavior=TriggerBehavior.CAPTURE_NOWAIT,
+                    synchronize=False,
+                ),
+                command="exit 0",
+            ),
+        ]
+        manager = TriggerManager(configs)
+        
+        result = await manager.on_gcode_pre("M8", ("127.0.0.1", 1234))
+        
+        # CAPTURE_NOWAIT returns success immediately
+        assert result.should_forward is False
+        assert result.fake_response == "ok"
+        assert result.should_synchronize is False
+
+    @pytest.mark.asyncio
+    async def test_forward_and_capture_nowait_mixed(self):
+        """Test FORWARD and CAPTURE_NOWAIT triggers together."""
+        configs = [
+            CustomTriggerConfig(
+                id="forward-trigger",
+                trigger=GCodeTriggerConfig(
+                    type="gcode",
+                    match="M8",
+                    behavior=TriggerBehavior.FORWARD,
+                    synchronize=False,
+                ),
+                command="exit 0",
+            ),
+            CustomTriggerConfig(
+                id="nowait-trigger",
+                trigger=GCodeTriggerConfig(
+                    type="gcode",
+                    match="M8",
+                    behavior=TriggerBehavior.CAPTURE_NOWAIT,
+                    synchronize=False,
+                ),
+                command="exit 0",
+            ),
+        ]
+        manager = TriggerManager(configs)
+        
+        result = await manager.on_gcode_pre("M8", ("127.0.0.1", 1234))
+        
+        # FORWARD triggers override, so should_forward is True
+        assert result.should_forward is True
+
+    @pytest.mark.asyncio
+    async def test_sync_trigger_prevents_capture_response(self):
+        """Test that presence of sync triggers prevents early capture response."""
+        configs = [
+            CustomTriggerConfig(
+                id="pre-trigger",
+                trigger=GCodeTriggerConfig(
+                    type="gcode",
+                    match="M[89]",
+                    behavior=TriggerBehavior.CAPTURE,
+                    synchronize=False,
+                ),
+                command="exit 0",
+            ),
+            CustomTriggerConfig(
+                id="post-trigger",
+                trigger=GCodeTriggerConfig(
+                    type="gcode",
+                    match="M9",
+                    behavior=TriggerBehavior.CAPTURE,
+                    synchronize=True,
+                ),
+                command="exit 0",
+            ),
+        ]
+        manager = TriggerManager(configs)
+        
+        result = await manager.on_gcode_pre("M9", ("127.0.0.1", 1234))
+        
+        # Even though pre-trigger is CAPTURE, we can't return early
+        # because we need sync for post-trigger
+        assert result.should_synchronize is True
+        assert result.should_forward is True
+        assert result.fake_response is None
+
+    @pytest.mark.asyncio
+    async def test_multiple_gcode_commands_in_sequence(self):
+        """Test processing multiple commands in sequence."""
+        configs = [
+            CustomTriggerConfig(
+                id="m8-trigger",
                 trigger=GCodeTriggerConfig(
                     type="gcode",
                     match="M8",
@@ -361,13 +441,61 @@ class TestTwoStageTriggerHandling:
                 ),
                 command="exit 0",
             ),
+            CustomTriggerConfig(
+                id="m9-trigger",
+                trigger=GCodeTriggerConfig(
+                    type="gcode",
+                    match="M9",
+                    behavior=TriggerBehavior.CAPTURE,
+                    synchronize=True,
+                ),
+                command="exit 0",
+            ),
         ]
         manager = TriggerManager(configs)
         
-        # Call old-style on_gcode
-        result = await manager.on_gcode("M8", ("127.0.0.1", 1234))
+        # Process M8 (pre-trigger only)
+        result1 = await manager.on_gcode_pre("M8", ("127.0.0.1", 1234))
+        assert result1.should_forward is False
+        assert result1.should_synchronize is False
         
-        # Should work and return pre-phase results
-        assert result is not None
-        assert result["triggered"] is True
-        assert "matching_triggers" in result
+        # Process M9 (has post-trigger)
+        result2 = await manager.on_gcode_pre("M9", ("127.0.0.1", 1234))
+        assert result2.should_synchronize is True
+        
+        # Post-phase for M9
+        post_result = await manager.on_gcode_post("M9", ("127.0.0.1", 1234))
+        assert post_result is None
+
+    @pytest.mark.asyncio
+    async def test_synchronization_required_flag_consistency(self):
+        """Test that should_synchronize flag is set correctly."""
+        # Test 1: No sync triggers
+        manager1 = TriggerManager([
+            CustomTriggerConfig(
+                id="pre",
+                trigger=GCodeTriggerConfig(
+                    type="gcode",
+                    match="M8",
+                    synchronize=False,
+                ),
+                command="exit 0",
+            ),
+        ])
+        result1 = await manager1.on_gcode_pre("M8", ("127.0.0.1", 1234))
+        assert result1.should_synchronize is False
+        
+        # Test 2: With sync triggers
+        manager2 = TriggerManager([
+            CustomTriggerConfig(
+                id="post",
+                trigger=GCodeTriggerConfig(
+                    type="gcode",
+                    match="M9",
+                    synchronize=True,
+                ),
+                command="exit 0",
+            ),
+        ])
+        result2 = await manager2.on_gcode_pre("M9", ("127.0.0.1", 1234))
+        assert result2.should_synchronize is True

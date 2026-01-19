@@ -7,10 +7,7 @@ external scripts or perform custom actions based on the data.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Awaitable
 from dataclasses import dataclass
-from typing import Any
-
 
 @dataclass
 class GCodeHandlerPreResponse:
@@ -114,6 +111,10 @@ class DefaultGCodeHandler(GCodeHandler):
         """No-op, return None for default behavior."""
         return None
 
+    async def on_gcode_post(
+        self, gcode: str, client_address: tuple[str, int]
+    ) -> str | None:
+        return "ok"
 
 class DefaultResponseHandler(ResponseHandler):
     """
@@ -127,63 +128,3 @@ class DefaultResponseHandler(ResponseHandler):
     ) -> None:
         """No-op after sending."""
         pass
-
-
-# Type aliases for callback-based handlers (alternative to class-based)
-GCodeCallback = Callable[[str, tuple[str, int]], Awaitable[dict[str, Any] | None]]
-ResponseCallback = Callable[[str, str, tuple[str, int]], Awaitable[None]]
-
-
-class CallbackGCodeHandler(GCodeHandler):
-    """
-    GCode handler that uses callback functions.
-    
-    This provides a simpler alternative to subclassing for simple use cases.
-    """
-    
-    def __init__(
-        self,
-        on_gcode: GCodeCallback | None = None,
-    ):
-        """
-        Initialize with optional callback functions.
-        
-        Args:
-            on_received: Callback for when GCode is received.
-            on_sent: Callback for when GCode is sent.
-        """
-        self._on_gcode = on_gcode
-    
-    async def on_gcode_pre(
-        self, gcode: str, client_address: tuple[str, int]
-    ) -> GCodeHandlerPreResponse | None:
-        if self._on_gcode:
-            return await self._on_gcode(gcode, client_address)
-        return None
-
-
-class CallbackResponseHandler(ResponseHandler):
-    """
-    Response handler that uses callback functions.
-    
-    This provides a simpler alternative to subclassing for simple use cases.
-    """
-    
-    def __init__(
-        self,
-        on_response: ResponseCallback | None = None,
-    ):
-        """
-        Initialize with optional callback functions.
-        
-        Args:
-            on_received: Callback for when a response is received.
-            on_sent: Callback for when a response is sent.
-        """
-        self._on_response = on_response
-    
-    async def on_response(
-        self, response: str, gcode: str, client_address: tuple[str, int]
-    ) -> None:
-        if self._on_response:
-            await self._on_response(response, gcode, client_address)
