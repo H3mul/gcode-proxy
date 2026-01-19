@@ -99,7 +99,4 @@ def clean_grbl_response(raw_line: str) -> str:
     if match:
         cleaned = match.group(1) # Return only the GRBL part
 
-    if cleaned.strip() != raw_line.strip():
-        logger.debug(f"Original line before cleaning: {raw_line.strip()}")
-
     return cleaned.strip()
