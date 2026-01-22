@@ -32,30 +32,9 @@ from .config import (
     ENV_DEVICE_NORMALIZE_GRBL_RESPONSES,
     Config,
 )
+from .logging import setup_logging
 from .service import GCodeProxyService
 from .trigger_manager import TriggerManager
-
-
-def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
-    """
-    Configure logging based on verbosity settings.
-    
-    Args:
-        verbose: If True, set log level to DEBUG.
-        quiet: If True, set log level to ERROR (takes precedence over verbose).
-    """
-    if quiet:
-        level = logging.ERROR
-    elif verbose:
-        level = logging.DEBUG
-    else:
-        level = logging.INFO
-    
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
 
 
 @click.command()
@@ -146,9 +125,9 @@ def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
 )
 @click.option(
     "-v", "--verbose",
-    is_flag=True,
-    default=False,
-    help="Enable verbose (debug) logging.",
+    count=True,
+    default=0,
+    help="Increase verbosity level (-v for DEBUG, -vv for VERBOSE).",
 )
 @click.option(
     "-q", "--quiet",
@@ -176,46 +155,46 @@ def main(
     response_timeout: float | None,
     gcode_log_file: Path | None,
     dry_run: bool,
-    verbose: bool,
+    verbose: int,
     quiet: bool,
     generate_config: bool,
 ) -> None:
     """
     GCode Proxy Server - Forward GCode commands from TCP clients to USB serial devices.
-    
+
     This server acts as a middleman between GCode stream sources (such as CAM software
     or network-based senders) and USB-connected devices (such as 3D printers or CNC machines).
-    
+
     Configuration is loaded with the following precedence (highest to lowest):
-    
+
     \b
     1. Environment variables
     2. CLI arguments
     3. Configuration file
     4. Default values
-    
+
     Example usage:
-    
+
     \b
         # Start with default settings
         gcode-proxy-server
-        
+
         # Specify device and port
         gcode-proxy-server --device 303a:4001 --port 9000
-        
+
         # Use a custom config file
         gcode-proxy-server --config /etc/gcode-proxy/config.yaml
-        
+
         # Run in dry-run mode (no actual hardware)
         gcode-proxy-server --dry-run
-        
+
         # Generate a default config file
         gcode-proxy-server --generate-config
     """
     # Set up logging first
-    setup_logging(verbose=verbose, quiet=quiet)
+    setup_logging(verbosity_level=verbose, quiet=quiet)
     logger = logging.getLogger(__name__)
-    
+
     # Build CLI args dict for config loading
     cli_args: dict[str, Any] = {}
     if port is not None:
@@ -234,13 +213,13 @@ def main(
         cli_args["baud_rate"] = baud_rate
     if serial_delay is not None:
         cli_args["serial_delay"] = serial_delay
-    
+
     if response_timeout is not None:
         cli_args["response_timeout"] = response_timeout
-    
+
     if gcode_log_file is not None:
         cli_args["gcode_log_file"] = str(gcode_log_file)
-    
+
     try:
         # Load configuration (skip device validation in dry-run mode)
         config = Config.load(
@@ -251,7 +230,7 @@ def main(
     except ValueError as e:
         logger.error(f"Configuration error: {e}")
         sys.exit(1)
-    
+
     # Handle --generate-config
     if generate_config:
         target_path = config_file if config_file else DEFAULT_CONFIG_PATH
@@ -262,7 +241,7 @@ def main(
             click.echo(f"Error generating config file: {e}", err=True)
             sys.exit(1)
         return
-    
+
     # Log the configuration being used
     logger.info("Starting GCode Proxy Server")
     if dry_run:
@@ -279,7 +258,7 @@ def main(
         logger.info(f"  GCode log file: {config.gcode_log_file}")
     if config.custom_triggers:
         logger.info(f"  Custom triggers: {len(config.custom_triggers)} configured")
-    
+
     # Create trigger manager if triggers are configured
     trigger_manager = None
     if config.custom_triggers:
@@ -288,7 +267,7 @@ def main(
         except ValueError as e:
             logger.error(f"Failed to load triggers: {e}")
             sys.exit(1)
-    
+
     # Create the service based on mode
     if dry_run:
         service = GCodeProxyService.create_dry_run(
@@ -317,7 +296,7 @@ def main(
             normalize_grbl_responses=config.device.normalize_grbl_responses,
         )
         service.trigger_manager = trigger_manager
-    
+
     # Set up signal handlers for graceful shutdown
     class ExitSignal(Exception):  # noqa: N818
         pass
@@ -338,7 +317,7 @@ def main(
         logger.info("Interrupted by user")
     except Exception as e:
         logger.error(f"Fatal error: {e}")
-        if verbose:
+        if verbose > 0:
             import traceback
             traceback.print_exc()
         sys.exit(1)
@@ -349,32 +328,32 @@ def main(
 async def run_service(service: GCodeProxyService) -> None:
     """
     Run the proxy service with proper signal handling.
-    
+
     Args:
         service: The GCodeProxyService instance to run.
     """
     logger = logging.getLogger(__name__)
-    
+
     # Set up async signal handlers on Unix
     loop = asyncio.get_running_loop()
-    
+
     stop_event = asyncio.Event()
-    
+
     def signal_handler() -> None:
         logger.info("Shutdown signal received")
         stop_event.set()
-    
+
     if sys.platform != "win32":
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, signal_handler)
-    
+
     try:
         # Start the service
         await service.start()
-        
+
         # Wait for stop signal or server to finish
         await stop_event.wait()
-        
+
     finally:
         # Clean shutdown
         await service.stop()

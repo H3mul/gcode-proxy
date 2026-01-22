@@ -23,6 +23,7 @@ from .handlers import (
 from .utils import (
     SerialConnectionError,
     clean_grbl_response,
+    detect_grbl_terminator,
     find_serial_port_by_usb_id,
 )
 
@@ -30,7 +31,6 @@ if TYPE_CHECKING:
     from .task_queue import Task, TaskQueue
 
 logger = logging.getLogger(__name__)
-
 
 class GCodeDevice:
     """
@@ -177,26 +177,26 @@ class GCodeDevice:
     async def _synchronize_device(self) -> str:
         """
         Inject a synchronization command to force device buffer completion.
-        
+
         Sends a G4 P0 (dwell with 0 duration) command to the device and waits
         for the response. This forces all prior commands in the device buffer
         to complete before returning.
-        
+
         Returns:
             The device response to the synchronization command.
-            
+
         Raises:
             asyncio.TimeoutError: If the device doesn't respond in time.
             SerialConnectionError: If the serial connection is not available.
         """
         sync_command = "G4 P0\n"
         logger.debug("Injecting synchronization command: G4 P0")
-        
+
         await self._log_gcode(sync_command, "sync injection to device")
         await self._send(sync_command)
         sync_response = await self._receive()
         await self._log_gcode(sync_response, "device sync response")
-        
+
         logger.debug(f"Synchronization response: {sync_response.strip()}")
         return sync_response
 
@@ -217,14 +217,14 @@ class GCodeDevice:
             task: The task to process.
         """
         gcode = task.command
+
         client_address = task.client_address
+        source_address = f"{client_address[0]}:{client_address[1]}"
 
         if not gcode.endswith("\n"):
             gcode += "\n"
 
         try:
-            source_address = f"{client_address[0]}:{client_address[1]}"
-            
             # Pre-phase: Call the GCode handler and get behavior config
             handler_result = await self.gcode_handler.on_gcode_pre(gcode, client_address)
 
@@ -232,7 +232,7 @@ class GCodeDevice:
             should_forward = True
             fake_response = None
             should_synchronize = False
-            
+
             if handler_result:
                 should_forward = handler_result.should_forward
                 fake_response = handler_result.fake_response
@@ -250,9 +250,9 @@ class GCodeDevice:
                 except Exception as e:
                     logger.error(f"Error during device synchronization: {e}")
                     raise
-                
+
                 post_result = await self.gcode_handler.on_gcode_post(gcode, client_address)
-                
+
                 if post_result:
                     # Merge pre and post responses
                     if fake_response == "ok":
@@ -271,8 +271,8 @@ class GCodeDevice:
 
                 # Send to device and wait for response
                 await self._send(gcode)
-                logger.debug(f"Sent: {gcode.strip()}")
-                
+                logger.debug(f"Sent: {repr(gcode.strip())}")
+
                 device_response = await self._receive()
                 logger.debug(f"Received: {device_response.strip()}")
                 await self._log_gcode(device_response, "device response")
@@ -352,7 +352,7 @@ class GCodeDevice:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
             if message:
                 message = f" [{message}]"
-            log_entry = f"{timestamp} - {source}{message}: {gcode.strip()}"
+            log_entry = f"{timestamp} - {source}{message}: {repr(gcode.strip())}"
 
             async with self._log_lock:
                 with open(self.gcode_log_file, "a", encoding="utf-8") as f:
@@ -377,9 +377,6 @@ class GCodeSerialProtocol(asyncio.Protocol):
     This protocol handles the low-level serial communication and buffers
     incoming data until complete responses are received.
     """
-
-    # Response terminators that indicate end of device response
-    RESPONSE_TERMINATORS = ("ok", "error", "!!")
 
     def __init__(self, normalize_grbl_responses: bool = True):
         """
@@ -417,24 +414,26 @@ class GCodeSerialProtocol(asyncio.Protocol):
         are on their own lines before processing.
         """
 
+        logger.verbose(f"Raw serial data received: {repr(data)}")
+
         # Decode the incoming data
         decoded_data = data.decode("utf-8", errors="replace")
-        
+
         lines = decoded_data.split("\n")
-        
+
         # Process complete lines
         for line in lines:
             # Normalize GRBL responses if enabled
             if self.normalize_grbl_responses:
                 line = clean_grbl_response(line)
-    
+
             decoded_line = line.strip()
 
             if not decoded_line:
                 continue
 
             # Check if line is a terminator
-            if decoded_line.lower() in self.RESPONSE_TERMINATORS:
+            if detect_grbl_terminator(decoded_line.lower()):
                 self._response_lines.append(decoded_line)
                 self._response_complete = True
                 self._response_event.set()
@@ -486,7 +485,6 @@ class GCodeSerialProtocol(asyncio.Protocol):
         response = "\n".join(self._response_lines)
         self._response_lines = []
         return response
-
 
 class GCodeSerialDevice(GCodeDevice):
     """

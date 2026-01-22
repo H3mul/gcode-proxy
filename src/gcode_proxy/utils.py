@@ -69,6 +69,14 @@ def find_serial_port_by_usb_id(usb_id: str) -> str:
     )
 
 
+GRBL_CONTENT_RE = re.compile(
+    r"^.*?(\d+\.\d+|\$.*|ok|error:\d+|ALARM:\d+|<[^>]+>|\[MSG:[^\]]+\]|Grbl\s\d+\.\d+.*)$",
+    re.IGNORECASE,
+)
+GRBL_TERMINATORS_RE = re.compile(r"ok|error:\d+|!!|grbl\s\d+\.\d+.*", re.IGNORECASE)
+GRBL_SOFT_RESET_RE = re.compile(r"\x18", re.IGNORECASE)
+
+
 def clean_grbl_response(raw_line: str) -> str:
     """
     Clean a single line of GRBL response by removing ESP log output.
@@ -91,12 +99,35 @@ def clean_grbl_response(raw_line: str) -> str:
         >>> clean_grbl_response("ok")
         "ok"
     """
-    # The regex focuses on the end of the string
-    pattern = r"^.*?(\d+\.\d+|\$.*|ok|error:\d+|ALARM:\d+|<[^>]+>|\[MSG:[^\]]+\]|Grbl\s\d+\.\d+.*)$"
-    match = re.search(pattern, raw_line.strip())
-    
+
+    match = GRBL_CONTENT_RE.search(raw_line.strip())
+
     cleaned = ""
     if match:
-        cleaned = match.group(1) # Return only the GRBL part
+        cleaned = match.group(1)  # Return only the GRBL part
 
     return cleaned.strip()
+
+
+def detect_grbl_terminator(line: str) -> bool:
+    """
+    Detect if a line contains a GRBL terminator.
+
+    GRBL terminators include "ok", "error:<code>", "!!", and version strings.
+
+    Args:
+        line: A single line of cleaned GRBL response.
+    """
+
+    return bool(GRBL_TERMINATORS_RE.search(line))
+
+
+def detect_grbl_soft_reset(line: str) -> bool:
+    """
+    Detect if a line contains a GRBL soft reset character.
+
+    Args:
+        line: A single line of raw serial output.
+    """
+
+    return bool(GRBL_SOFT_RESET_RE.search(line))

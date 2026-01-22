@@ -103,3 +103,11 @@ def create_task_queue(maxsize: int = 0) -> TaskQueue:
         A new TaskQueue instance.
     """
     return asyncio.Queue(maxsize=maxsize)
+    
+def empty_queue(q: TaskQueue):
+    while not q.empty():
+        try:
+            q.get_nowait()
+            q.task_done()
+        except asyncio.QueueEmpty:
+            break

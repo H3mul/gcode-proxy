@@ -26,7 +26,7 @@ server:
   # Maximum number of commands allowed in the queue
   # When the queue reaches this limit, new commands are rejected with an error
   # Environment variable: SERVER_QUEUE_LIMIT
-  queue-limit: 50
+  queue-limit: 1000
 
 device:
   # USB device ID in vendor:product format
@@ -51,7 +51,7 @@ device:
   # Timeout in seconds for waiting for device response
   # Increase this value if your device needs more time to respond to commands
   # Environment variable: DEVICE_RESPONSE_TIMEOUT
-  response-timeout: 30.0
+  response-timeout: 120.0
 
   # Normalize GRBL responses by cleaning ESP logs
   # When enabled, ESP log output that clobbers serial communication is removed,
