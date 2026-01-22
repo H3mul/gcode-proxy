@@ -12,7 +12,6 @@ from gcode_proxy.utils import detect_grbl_soft_reset
 
 from .task_queue import Task, TaskQueue, empty_queue
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -180,13 +179,29 @@ class GCodeServer:
             logger.error(f"Error sending response for {task.client_address}: {e}")
             await task.send_response_to_client(error_msg)
 
+    async def rate_limit_status_request(self, gcode: str) -> None:
+        """
+        Count the currently queued status requests and signal a drop for the new one if needed
+        """
+
+        if gcode.strip() != "?":
+            return
+
+        status_request_count = sum(
+            1 for task in list(self.task_queue._queue) if task.command.strip() == "?"
+        )
+
+        if status_request_count > 0:
+            logging.debug("Dropping status request to avoid flooding the device")
+            raise Exception("error: too many status requests in queue")
+
     async def handle_soft_reset(self, gcode: str) -> None:
         if not detect_grbl_soft_reset(gcode):
             return
 
         logging.info("Soft reset received, clearing command queue")
 
-        if (self.task_queue):
+        if self.task_queue:
             empty_queue(self.task_queue)
 
     async def _process_client_commands(
@@ -212,7 +227,7 @@ class GCodeServer:
                 # Read data from client with a timeout
                 data = await asyncio.wait_for(
                     reader.read(4096),
-                    timeout=300.0  # 5 minute idle timeout
+                    timeout=300.0,  # 5 minute idle timeout
                 )
 
                 if not data:
@@ -236,15 +251,14 @@ class GCodeServer:
                 for command in commands:
                     try:
                         await self.handle_soft_reset(command)
+                        if await self.rate_limit_status_request(command):
+                            continue
 
                         # Check if queue is at or above the limit
                         if self.task_queue.qsize() >= self.queue_limit:
-                            error_msg = (
-                                f"error: command queue is full (limit: {self.queue_limit})"
-                            )
+                            error_msg = f"error: command queue is full (limit: {self.queue_limit})"
                             logger.warning(
-                                f"Queue full, rejecting command from {client_address}: "
-                                f"{command}"
+                                f"Queue full, rejecting command from {client_address}: {command}"
                             )
                             try:
                                 error_response = f"{error_msg}\n"
@@ -263,8 +277,10 @@ class GCodeServer:
 
                         # Add task to the queue
                         await self.task_queue.put(task)
-                        logger.debug(f"Queued command from {client_address}: {repr(command)}; " +
-                            f"Queue size: {self.task_queue.qsize()}")
+                        logger.debug(
+                            f"Queued command from {client_address}: {repr(command)}; "
+                            + f"Queue size: {self.task_queue.qsize()}"
+                        )
 
                         # Schedule response sending asynchronously without awaiting
                         # This allows the server to immediately process new incoming commands
