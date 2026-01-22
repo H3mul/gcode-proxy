@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 class GCodeDevice:
     """
     Base GCode device class that can be used for dry-run testing.
@@ -262,7 +263,7 @@ class GCodeDevice:
 
             if not should_forward:
                 # All triggers captured the command, don't send to device
-                response = fake_response or 'ok'
+                response = fake_response or "ok"
                 logger.debug(f"All triggers captured command, returning: {response}")
                 await self._log_gcode(task.command, source_address, "not forwarded to device")
                 await self._log_gcode(response, "trigger response")
@@ -389,6 +390,7 @@ class GCodeSerialProtocol(asyncio.Protocol):
         self._response_event = asyncio.Event()
         self._response_lines: list[str] = []
         self._response_complete = False
+        self._buffer: str = ""
         self.normalize_grbl_responses = normalize_grbl_responses
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
@@ -416,10 +418,10 @@ class GCodeSerialProtocol(asyncio.Protocol):
 
         logger.verbose(f"Raw serial data received: {repr(data)}")
 
-        # Decode the incoming data
-        decoded_data = data.decode("utf-8", errors="replace")
-
-        lines = decoded_data.split("\n")
+        # Operate on the cumulative buffer for current command response
+        # In case serial data gets split across multiple flush chunks
+        self._buffer += data.decode("utf-8", errors="replace")
+        lines = self._buffer.split("\n")
 
         # Process complete lines
         for line in lines:
@@ -437,6 +439,7 @@ class GCodeSerialProtocol(asyncio.Protocol):
                 self._response_lines.append(decoded_line)
                 self._response_complete = True
                 self._response_event.set()
+                self._buffer = ""
             else:
                 # Regular line, just add it
                 self._response_lines.append(decoded_line)
@@ -485,6 +488,7 @@ class GCodeSerialProtocol(asyncio.Protocol):
         response = "\n".join(self._response_lines)
         self._response_lines = []
         return response
+
 
 class GCodeSerialDevice(GCodeDevice):
     """
@@ -581,9 +585,7 @@ class GCodeSerialDevice(GCodeDevice):
 
         # Create protocol factory that passes the normalize flag
         def protocol_factory():
-            return GCodeSerialProtocol(
-                normalize_grbl_responses=self.normalize_grbl_responses
-            )
+            return GCodeSerialProtocol(normalize_grbl_responses=self.normalize_grbl_responses)
 
         self._transport, self._protocol = await serial_asyncio.create_serial_connection(
             loop,

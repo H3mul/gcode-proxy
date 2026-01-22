@@ -179,7 +179,7 @@ class GCodeServer:
             logger.error(f"Error sending response for {task.client_address}: {e}")
             await task.send_response_to_client(error_msg)
 
-    async def rate_limit_status_request(self, gcode: str) -> None:
+    async def rate_limit_status_request(self, gcode: str) -> bool:
         """
         Count the currently queued status requests and signal a drop for the new one if needed
         """
@@ -192,8 +192,8 @@ class GCodeServer:
         )
 
         if status_request_count > 0:
-            logging.debug("Dropping status request to avoid flooding the device")
-            raise Exception("error: too many status requests in queue")
+            return True
+        return False
 
     async def handle_soft_reset(self, gcode: str) -> None:
         if not detect_grbl_soft_reset(gcode):
@@ -252,6 +252,7 @@ class GCodeServer:
                     try:
                         await self.handle_soft_reset(command)
                         if await self.rate_limit_status_request(command):
+                            logging.debug(f"Dropping status `?` request from {client_address} to avoid flooding the device")
                             continue
 
                         # Check if queue is at or above the limit
