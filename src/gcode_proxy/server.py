@@ -9,8 +9,8 @@ import asyncio
 import logging
 
 from gcode_proxy.utils import detect_grbl_soft_reset
-
 from .task_queue import Task, TaskQueue, empty_queue
+from gcode_proxy.logging import log_gcode
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +185,7 @@ class GCodeServer:
         """
 
         if gcode.strip() != "?":
-            return
+            return False
 
         status_request_count = sum(
             1 for task in list(self.task_queue._queue) if task.command.strip() == "?"
@@ -236,6 +236,8 @@ class GCodeServer:
 
                 # Decode and process the GCode commands
                 raw_commands = data.decode("utf-8", errors="replace")
+
+                log_gcode(raw_commands, f"{client_address}", "command TCP request")
 
                 # Split into individual commands (handle both \n and \r\n)
                 commands = [

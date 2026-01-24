@@ -6,6 +6,7 @@ and GCode device for a complete proxy service, using a task queue for communicat
 """
 
 import logging
+from .logging import setup_logging
 
 from .device import GCodeDevice, GCodeSerialDevice
 from .handlers import GCodeHandler, ResponseHandler
@@ -112,6 +113,10 @@ class GCodeProxyService:
         """
         # Create the task queue
         task_queue = create_task_queue(maxsize=queue_limit)
+
+        # Configure the GCode file logger if requested
+        if gcode_log_file:
+            setup_logging(gcode_log_file=gcode_log_file)
         
         device = GCodeSerialDevice(
             usb_id=usb_id,
@@ -122,7 +127,6 @@ class GCodeProxyService:
             gcode_handler=gcode_handler,
             response_handler=response_handler,
             response_timeout=response_timeout,
-            gcode_log_file=gcode_log_file,
             normalize_grbl_responses=normalize_grbl_responses,
         )
         return cls(
@@ -169,13 +173,16 @@ class GCodeProxyService:
         """
         # Create the task queue
         task_queue = create_task_queue(maxsize=queue_limit)
+
+        # Configure the GCode file logger if requested
+        if gcode_log_file:
+            setup_logging(gcode_log_file=gcode_log_file)
         
         device = GCodeDevice(
             task_queue=task_queue,
             gcode_handler=gcode_handler,
             response_handler=response_handler,
             response_timeout=response_timeout,
-            gcode_log_file=gcode_log_file,
             normalize_grbl_responses=normalize_grbl_responses,
         )
         return cls(

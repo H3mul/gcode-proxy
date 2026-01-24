@@ -8,11 +8,11 @@ and communication with USB-connected devices using asyncio.Protocol.
 import asyncio
 import logging
 from collections.abc import Coroutine
-from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import serial_asyncio
+
+from gcode_proxy.logging import get_gcode_logger, log_gcode
 
 from .handlers import (
     DefaultGCodeHandler,
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from .task_queue import Task, TaskQueue
 
 logger = logging.getLogger(__name__)
+gcode_logger = get_gcode_logger()
 
 
 class GCodeDevice:
@@ -48,7 +49,6 @@ class GCodeDevice:
         gcode_handler: GCodeHandler | None = None,
         response_handler: ResponseHandler | None = None,
         response_timeout: float = 30.0,
-        gcode_log_file: str | None = None,
         normalize_grbl_responses: bool = True,
     ):
         """
@@ -59,7 +59,6 @@ class GCodeDevice:
             gcode_handler: Custom handler for GCode commands.
             response_handler: Custom handler for serial responses.
             response_timeout: Timeout in seconds for waiting for device response.
-            gcode_log_file: Optional path to file for logging GCode communication.
             normalize_grbl_responses: Whether to normalize GRBL
                 responses (default: True).
         """
@@ -67,11 +66,9 @@ class GCodeDevice:
         self.gcode_handler = gcode_handler or DefaultGCodeHandler()
         self.response_handler = response_handler or DefaultResponseHandler()
         self.response_timeout = response_timeout
-        self.gcode_log_file = Path(gcode_log_file) if gcode_log_file else None
         self.normalize_grbl_responses = normalize_grbl_responses
 
         self._connected = False
-        self._log_lock = asyncio.Lock()
         self._task_loop_task: asyncio.Task | None = None
         self._running = False
 
@@ -115,10 +112,6 @@ class GCodeDevice:
 
         self._connected = True
         logger.info("Connected to dry-run device (no actual hardware)")
-
-        # Initialize log file if specified
-        if self.gcode_log_file:
-            await self._initialize_log_file()
 
         # Start the task processing loop
         self._running = True
@@ -193,10 +186,10 @@ class GCodeDevice:
         sync_command = "G4 P0\n"
         logger.debug("Injecting synchronization command: G4 P0")
 
-        await self._log_gcode(sync_command, "sync injection to device")
+        log_gcode(sync_command, "server", "injected synchronization")
+
         await self._send(sync_command)
         sync_response = await self._receive()
-        await self._log_gcode(sync_response, "device sync response")
 
         logger.debug(f"Synchronization response: {sync_response.strip()}")
         return sync_response
@@ -265,10 +258,10 @@ class GCodeDevice:
                 # All triggers captured the command, don't send to device
                 response = fake_response or "ok"
                 logger.debug(f"All triggers captured command, returning: {response}")
-                await self._log_gcode(task.command, source_address, "not forwarded to device")
-                await self._log_gcode(response, "trigger response")
+                log_gcode(task.command, source_address, "not forwarded to device")
+                log_gcode(response, "trigger", "response")
             else:
-                await self._log_gcode(task.command, source_address, "forwarded to device")
+                log_gcode(task.command, source_address, "forwarded to device")
 
                 # Send to device and wait for response
                 await self._send(gcode)
@@ -276,7 +269,7 @@ class GCodeDevice:
 
                 device_response = await self._receive()
                 logger.debug(f"Received: {device_response.strip()}")
-                await self._log_gcode(device_response, "device response")
+                log_gcode(device_response, "device", "device clean response")
 
                 response = device_response
 
@@ -291,7 +284,7 @@ class GCodeDevice:
         except asyncio.TimeoutError:
             logger.warning(f"Timeout waiting for response to: {gcode.strip()}")
             message = "server-error: timed out waiting for server response"
-            await self._log_gcode(message, "device")
+            log_gcode(message, "server", "command timeout")
             task.set_response(message)
         except Exception as e:
             logger.error(f"Error sending GCode: {e}")
@@ -319,47 +312,6 @@ class GCodeDevice:
         """
         logger.debug("[DRY-RUN] Returning simulated 'ok' response")
         return "ok"
-
-    async def _initialize_log_file(self) -> None:
-        """Initialize the GCode log file."""
-        if not self.gcode_log_file:
-            return
-
-        try:
-            # Create parent directories if needed
-            self.gcode_log_file.parent.mkdir(parents=True, exist_ok=True)
-
-            # Create the file if it doesn't exist
-            if not self.gcode_log_file.exists():
-                self.gcode_log_file.touch()
-                logger.info(f"Created GCode log file: {self.gcode_log_file}")
-        except Exception as e:
-            logger.error(f"Failed to initialize log file {self.gcode_log_file}: {e}")
-            self.gcode_log_file = None
-
-    async def _log_gcode(self, gcode: str, source: str, message: str = "") -> None:
-        """
-        Log a GCode command or response to the log file.
-
-        Args:
-            gcode: The GCode command or response to log.
-            source: The source (client address or device identifier).
-        """
-        if not self.gcode_log_file:
-            return
-
-        try:
-            # Format: [timestamp][source]: message
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            if message:
-                message = f" [{message}]"
-            log_entry = f"{timestamp} - {source}{message}: {repr(gcode.strip())}"
-
-            async with self._log_lock:
-                with open(self.gcode_log_file, "a", encoding="utf-8") as f:
-                    f.write(log_entry + "\n")
-        except Exception as e:
-            logger.error(f"Failed to write to GCode log file: {e}")
 
     async def __aenter__(self) -> "GCodeDevice":
         """Async context manager entry."""
@@ -416,7 +368,8 @@ class GCodeSerialProtocol(asyncio.Protocol):
         are on their own lines before processing.
         """
 
-        logger.verbose(f"Raw serial data received: {repr(data)}")
+        logger.verbose(f"Raw serial data received: {repr(data)}")  # type: ignore[attr-defined]
+        log_gcode(data, "device", "serial data in")
 
         # Operate on the cumulative buffer for current command response
         # In case serial data gets split across multiple flush chunks
@@ -509,7 +462,6 @@ class GCodeSerialDevice(GCodeDevice):
         response_timeout: float = 30.0,
         read_buffer_size: int = 4096,
         initialization_delay: float = 0.1,
-        gcode_log_file: str | None = None,
         normalize_grbl_responses: bool = True,
     ):
         """
@@ -525,7 +477,6 @@ class GCodeSerialDevice(GCodeDevice):
             response_timeout: Timeout in seconds for waiting for device response.
             read_buffer_size: Size of the read buffer for serial communication.
             initialization_delay: Delay in seconds to allow device initialization after connection.
-            gcode_log_file: Optional path to file for logging GCode communication.
             normalize_grbl_responses: Whether to normalize GRBL
                 responses (default: True).
 
@@ -539,7 +490,6 @@ class GCodeSerialDevice(GCodeDevice):
             task_queue=task_queue,
             gcode_handler=gcode_handler,
             response_handler=response_handler,
-            gcode_log_file=gcode_log_file,
         )
 
         self.usb_id = usb_id
@@ -602,10 +552,6 @@ class GCodeSerialDevice(GCodeDevice):
 
         # Flush any startup messages from the device
         await self._flush_input()
-
-        # Initialize log file if specified
-        if self.gcode_log_file:
-            await self._initialize_log_file()
 
         # Start the task processing loop
         self._running = True
