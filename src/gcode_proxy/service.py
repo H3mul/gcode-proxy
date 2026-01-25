@@ -13,6 +13,7 @@ from .handlers import GCodeHandler, ResponseHandler
 from .server import GCodeServer
 # from .task_queue import TaskQueue, create_task_queue
 from .trigger_manager import TriggerManager
+from .connection_manager import ConnectionManager
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ class GCodeProxyService:
         """
         self.device = device
         self.trigger_manager = trigger_manager
+        self.connection_manager = ConnectionManager()
         
         # Create the server with the device
         self.server = GCodeServer(
@@ -184,6 +186,7 @@ class GCodeProxyService:
         try:
             # Connect to the device (this starts the task processing loop)
             await self.device.connect()
+            await self.connection_manager.start()
             
             # Start and run the server
             await self.server.serve_forever()
@@ -191,6 +194,7 @@ class GCodeProxyService:
         finally:
             # Clean up
             await self.server.stop()
+            await self.connection_manager.stop()
             await self.device.disconnect()
     
     async def start(self) -> None:
@@ -200,11 +204,13 @@ class GCodeProxyService:
         Use this when you want to run the service in the background.
         """
         await self.device.connect()
+        await self.connection_manager.start()
         await self.server.start()
     
     async def stop(self) -> None:
         """Stop the service."""
         await self.server.stop()
+        await self.connection_manager.stop()
         await self.device.disconnect()
         
         # Wait for any pending trigger tasks

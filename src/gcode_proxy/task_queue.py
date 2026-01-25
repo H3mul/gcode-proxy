@@ -7,11 +7,9 @@ from multiple TCP clients, ensuring sequential execution on the serial device.
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
 
-if TYPE_CHECKING:
-    from asyncio import StreamWriter
+
 
 
 logger = logging.getLogger(__name__)
@@ -24,72 +22,28 @@ class Task:
 
     Attributes:
         command: The GCode command string to execute.
-        client_address: Tuple of (host, port) identifying the client.
-        writer: The StreamWriter to send the response back to the client.
+        client_uuid: UUID of the client connection.
         wait_response: Whether to wait for device confirmation.
         response_future: Future that will be set with the response when available.
     """
     command: str
-    client_address: tuple[str, int]
-    writer: "StreamWriter"
+    client_uuid: str
     queue_task: bool = True
     wait_response: bool = True
-    response_future: asyncio.Future[str] = field(
-        default_factory=lambda: asyncio.get_event_loop().create_future()
-    )
 
-    def set_response(self, response: str) -> None:
+    def send_response(self, response: str, broadcast=False) -> None:
         """
         Set the response for this task.
 
         Args:
             response: The response string from the device.
         """
-        if not self.response_future.done():
-            self.response_future.set_result(response)
+        from .connection_manager import ConnectionManager
 
-    def set_error(self, error: Exception) -> None:
-        """
-        Set an error for this task.
-
-        Args:
-            error: The exception that occurred.
-        """
-        if not self.response_future.done():
-            self.response_future.set_exception(error)
-
-    async def wait_for_response(self, timeout: float | None = None) -> str:
-        """
-        Wait for the response to be available.
-
-        Args:
-            timeout: Optional timeout in seconds.
-
-        Returns:
-            The response string from the device.
-
-        Raises:
-            asyncio.TimeoutError: If the timeout is exceeded.
-        """
-        if timeout is not None:
-            return await asyncio.wait_for(self.response_future, timeout=timeout)
-        return await self.response_future
-
-    async def send_response_to_client(self, response: str) -> None:
-        """
-        Send the response back to the TCP client.
-
-        Args:
-            response: The response string to send.
-        """
         try:
-            logger.debug(f"Responding to client {self.client_address}: {response}")
-            response_data = response + "\n" if not response.endswith("\n") else response
-            self.writer.write(response_data.encode("utf-8"))
-            await self.writer.drain()
+            ConnectionManager().communicate(response, None if broadcast else self.client_uuid)
         except Exception as e:
-            logger.error(f"Failed to send response to client {self.client_address}: {e}")
-
+            logger.error(f"Failed to queue response to client {self.client_uuid}: {e}")
 
 # Type alias for the task queue
 TaskQueue = asyncio.Queue[Task]

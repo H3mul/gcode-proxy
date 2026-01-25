@@ -186,7 +186,7 @@ class GCodeDevice:
                         await self._process_task(task)
                     except Exception as e:
                         logger.error(f"Error processing task: {e}")
-                        task.set_error(e)
+                        task.send_response(f"error: {e}")
                     finally:
                         # Mark task as done
                         self.task_queue.task_done()
@@ -251,7 +251,8 @@ class GCodeDevice:
         """
         gcode = task.command
 
-        client_address = task.client_address
+        from .connection_manager import ConnectionManager
+        client_address = ConnectionManager().get_client_address(task.client_uuid) or ("unknown", 0)
         source_address = f"{client_address[0]}:{client_address[1]}"
 
         if not gcode.endswith("\n"):
@@ -301,7 +302,7 @@ class GCodeDevice:
                     response = "ok"
 
             # Set the response on the task
-            task.set_response(response)
+            task.send_response(response)
 
             # Log the response
 
@@ -313,10 +314,10 @@ class GCodeDevice:
             logger.warning(f"Timeout waiting for response to: {gcode.strip()}")
             message = "server-error: timed out waiting for server response"
             log_gcode(message, "server", "command timeout")
-            task.set_response(message)
+            task.send_response(message)
         except Exception as e:
             logger.error(f"Error sending GCode: {e}")
-            task.set_error(SerialConnectionError(f"Failed to send GCode: {e}"))
+            task.send_response("error: failed to send GCode")
 
     async def _send(self, gcode: str) -> None:
         """

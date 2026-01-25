@@ -12,6 +12,7 @@ import logging
 from gcode_proxy.utils import is_immediate_grbl_command
 from .device import GCodeDevice
 from .task_queue import Task
+from .connection_manager import ConnectionManager
 from gcode_proxy.logging import log_gcode
 
 logger = logging.getLogger(__name__)
@@ -150,13 +151,16 @@ class GCodeServer:
 
         logger.info(f"Client connected: {client_address}")
 
+        cm = ConnectionManager()
+        client_uuid = cm.register_client(writer)
+
         # Create a task for this connection and track it
         task = asyncio.current_task()
         if task:
             self._active_connections.add(task)
 
         try:
-            await self._process_client_commands(reader, writer, client_address)
+            await self._process_client_commands(reader, client_uuid, client_address)
         except asyncio.CancelledError:
             logger.info(f"Client connection cancelled: {client_address}")
         except Exception as e:
@@ -164,6 +168,8 @@ class GCodeServer:
         finally:
             if task:
                 self._active_connections.discard(task)
+
+            cm.unregister_client(writer)
 
             try:
                 writer.close()
@@ -173,28 +179,7 @@ class GCodeServer:
 
             logger.info(f"Client disconnected: {client_address}")
 
-    async def _send_response_when_ready(self, task: Task, timeout: float) -> None:
-        """
-        Wait for a task's response and send it back to the client.
 
-        This method is scheduled asynchronously to allow the server to continue
-        accepting and queuing new commands without blocking on device responses.
-
-        Args:
-            task: The Task object to wait for.
-            timeout: Timeout in seconds for waiting for the response.
-        """
-        try:
-            response = await task.wait_for_response(timeout=timeout)
-            await task.send_response_to_client(response)
-        except asyncio.TimeoutError:
-            error_msg = "error: timeout waiting for device response"
-            logger.error(f"Timeout for {task.client_address}: {task.command}")
-            await task.send_response_to_client(error_msg)
-        except Exception as e:
-            error_msg = f"error: {e}"
-            logger.error(f"Error sending response for {task.client_address}: {e}")
-            await task.send_response_to_client(error_msg)
 
     async def rate_limit_status_request(self, gcode: str) -> bool:
         """
@@ -204,8 +189,10 @@ class GCodeServer:
         if gcode.strip() != "?":
             return False
 
+        # Accessing private _queue to peek without consuming
+        queue_items = list(self.device.task_queue._queue)  # type: ignore
         status_request_count = sum(
-            1 for task in list(self.device.task_queue._queue) if task.command.strip() == "?"
+            1 for task in queue_items if task.command.strip() == "?"
         )
 
         if status_request_count > 0:
@@ -215,7 +202,7 @@ class GCodeServer:
     async def _process_client_commands(
         self,
         reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
+        client_uuid: str,
         client_address: tuple[str, int],
     ) -> None:
         """
@@ -227,7 +214,7 @@ class GCodeServer:
 
         Args:
             reader: The stream reader for the client connection.
-            writer: The stream writer for the client connection.
+            client_uuid: The client's UUID.
             client_address: The client's address tuple.
         """
         while self._running:
@@ -262,7 +249,10 @@ class GCodeServer:
                 for command in commands:
                     try:
                         if await self.rate_limit_status_request(command):
-                            logging.debug(f"Dropping status `?` request from {client_address} to avoid flooding the device")
+                            logging.debug(
+                                f"Dropping status `?` request from {client_address} "
+                                "to avoid flooding the device"
+                            )
                             continue
 
                         # Check if queue is at or above the limit
@@ -271,9 +261,9 @@ class GCodeServer:
                                 f"Queue full, rejecting command from {client_address}: {command}"
                             )
                             try:
-                                error_response = f"error: command queue is full (limit: {self.device.queue_maxsize()})"
-                                writer.write(error_response.encode("utf-8"))
-                                await writer.drain()
+                                limit = self.device.queue_maxsize()
+                                error_response = f"error: command queue is full (limit: {limit})"
+                                ConnectionManager().communicate(error_response, client_uuid)
                             except Exception:
                                 pass
                             continue
@@ -281,25 +271,18 @@ class GCodeServer:
                         # Create a task for this command
                         task = Task(
                             command=command,
-                            client_address=client_address,
-                            writer=writer,
+                            client_uuid=client_uuid,
                             queue_task=not is_immediate_grbl_command(command),
                         )
 
                         await self.device.do_task(task)
-
-                        # Schedule response sending asynchronously without awaiting
-                        # This allows the server to immediately process new incoming commands
-                        self.run_background(
-                            self._send_response_when_ready(task, self.response_timeout))
 
                     except Exception as e:
                         error_msg = f"error: {e}"
                         logger.error(f"Error queuing command from {client_address}: {e}")
                         try:
                             error_response = f"{error_msg}\n"
-                            writer.write(error_response.encode("utf-8"))
-                            await writer.drain()
+                            ConnectionManager().communicate(error_response, client_uuid)
                         except Exception:
                             pass
 
@@ -313,8 +296,7 @@ class GCodeServer:
                 logger.error(f"Error processing command from {client_address}: {e}")
                 try:
                     error_response = f"error: {e}\n"
-                    writer.write(error_response.encode("utf-8"))
-                    await writer.drain()
+                    ConnectionManager().communicate(error_response, client_uuid)
                 except Exception:
                     pass
                 break
