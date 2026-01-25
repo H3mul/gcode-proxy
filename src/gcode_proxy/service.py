@@ -11,7 +11,7 @@ from .logging import setup_logging
 from .device import GCodeDevice, GCodeSerialDevice
 from .handlers import GCodeHandler, ResponseHandler
 from .server import GCodeServer
-from .task_queue import TaskQueue, create_task_queue
+# from .task_queue import TaskQueue, create_task_queue
 from .trigger_manager import TriggerManager
 
 
@@ -33,8 +33,6 @@ class GCodeProxyService:
         address: str = "0.0.0.0",
         port: int = 8080,
         trigger_manager: TriggerManager | None = None,
-        task_queue: TaskQueue | None = None,
-        queue_limit: int = 50,
         response_timeout: float = 30.0,
         normalize_grbl_responses: bool = True,
     ):
@@ -46,8 +44,6 @@ class GCodeProxyService:
             address: Address to bind the server to.
             port: Port to listen on.
             trigger_manager: Optional TriggerManager for handling GCode triggers.
-            task_queue: Optional TaskQueue; if not provided, one will be created.
-            queue_limit: Maximum size of the command queue (default: 50).
             response_timeout: Timeout in seconds for waiting for device response (default: 30.0).
             normalize_grbl_responses: Whether to normalize GRBL
                 responses (default: True).
@@ -55,18 +51,11 @@ class GCodeProxyService:
         self.device = device
         self.trigger_manager = trigger_manager
         
-        # Create the task queue if not provided
-        self.task_queue = task_queue or create_task_queue(maxsize=queue_limit)
-        
-        # Set the task queue on the device
-        self.device.set_task_queue(self.task_queue)
-        
-        # Create the server with the task queue
+        # Create the server with the device
         self.server = GCodeServer(
-            task_queue=self.task_queue,
+            device=self.device,
             address=address,
             port=port,
-            queue_limit=queue_limit,
             response_timeout=response_timeout,
             normalize_grbl_responses=normalize_grbl_responses,
         )
@@ -111,9 +100,6 @@ class GCodeProxyService:
         Returns:
             A configured GCodeProxyService instance.
         """
-        # Create the task queue
-        task_queue = create_task_queue(maxsize=queue_limit)
-
         # Configure the GCode file logger if requested
         if gcode_log_file:
             setup_logging(gcode_log_file=gcode_log_file)
@@ -122,7 +108,7 @@ class GCodeProxyService:
             usb_id=usb_id,
             dev_path=dev_path,
             baud_rate=baud_rate,
-            task_queue=task_queue,
+            queue_size=queue_limit,
             initialization_delay=serial_delay,
             gcode_handler=gcode_handler,
             response_handler=response_handler,
@@ -133,8 +119,6 @@ class GCodeProxyService:
             device=device,
             address=address,
             port=port,
-            task_queue=task_queue,
-            queue_limit=queue_limit,
             response_timeout=response_timeout,
             normalize_grbl_responses=normalize_grbl_responses,
         )
@@ -171,15 +155,12 @@ class GCodeProxyService:
         Returns:
             A configured GCodeProxyService instance.
         """
-        # Create the task queue
-        task_queue = create_task_queue(maxsize=queue_limit)
-
         # Configure the GCode file logger if requested
         if gcode_log_file:
             setup_logging(gcode_log_file=gcode_log_file)
         
         device = GCodeDevice(
-            task_queue=task_queue,
+            queue_size=queue_limit,
             gcode_handler=gcode_handler,
             response_handler=response_handler,
             response_timeout=response_timeout,
@@ -189,8 +170,6 @@ class GCodeProxyService:
             device=device,
             address=address,
             port=port,
-            task_queue=task_queue,
-            queue_limit=queue_limit,
             response_timeout=response_timeout,
             normalize_grbl_responses=normalize_grbl_responses,
         )

@@ -75,6 +75,7 @@ GRBL_CONTENT_RE = re.compile(
 )
 GRBL_TERMINATORS_RE = re.compile(r"ok|error:\d+|!!|grbl\s\d+\.\d+.*", re.IGNORECASE)
 GRBL_SOFT_RESET_RE = re.compile(r"\x18", re.IGNORECASE)
+GRBL_IMMEDIATE_COMMANDS_RE = re.compile(r"M0|M1|M2|M30|!|~|\x18", re.IGNORECASE)
 
 
 def clean_grbl_response(raw_line: str) -> str:
@@ -122,12 +123,24 @@ def detect_grbl_terminator(line: str) -> bool:
     return bool(GRBL_TERMINATORS_RE.search(line))
 
 
-def detect_grbl_soft_reset(line: str) -> bool:
+def detect_grbl_soft_reset_command(command: str) -> bool:
     """
-    Detect if a line contains a GRBL soft reset character.
+    Detect if a command contains a GRBL soft reset character.
 
     Args:
         line: A single line of raw serial output.
     """
 
-    return bool(GRBL_SOFT_RESET_RE.search(line))
+    return bool(GRBL_SOFT_RESET_RE.search(command))
+
+def is_immediate_grbl_command(command: str) -> bool:
+    """
+    Check if a GCode command is an immediate command.
+
+    Immediate commands are executed right away without queuing.
+
+    Args:
+        gcode: The GCode command string.
+    """
+
+    return bool(GRBL_IMMEDIATE_COMMANDS_RE.search(command))

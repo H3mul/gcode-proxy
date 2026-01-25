@@ -6,10 +6,12 @@ and forwards GCode commands to the task queue for processing by the device.
 """
 
 import asyncio
+from collections.abc import Coroutine
 import logging
 
-from gcode_proxy.utils import detect_grbl_soft_reset
-from .task_queue import Task, TaskQueue, empty_queue
+from gcode_proxy.utils import is_immediate_grbl_command
+from .device import GCodeDevice
+from .task_queue import Task
 from gcode_proxy.logging import log_gcode
 
 logger = logging.getLogger(__name__)
@@ -25,35 +27,33 @@ class GCodeServer:
 
     def __init__(
         self,
-        task_queue: TaskQueue,
+        device: GCodeDevice,
         address: str = "0.0.0.0",
         port: int = 8080,
         response_timeout: float = 30.0,
-        queue_limit: int = 50,
         normalize_grbl_responses: bool = True,
     ):
         """
         Initialize the GCode server.
 
         Args:
-            task_queue: The TaskQueue for sending commands to the device.
+            device: The GCodeDevice instance.
             address: The address to bind the server to.
             port: The port to listen on.
             response_timeout: Timeout in seconds for waiting for device response.
-            queue_limit: Maximum number of commands allowed in the queue.
             normalize_grbl_responses: Whether to normalize GRBL
                 responses (default: True).
         """
-        self.task_queue = task_queue
+        self.device = device
         self.address = address
         self.port = port
         self.response_timeout = response_timeout
-        self.queue_limit = queue_limit
         self.normalize_grbl_responses = normalize_grbl_responses
 
         self._server: asyncio.Server | None = None
         self._running = False
         self._active_connections: set[asyncio.Task] = set()
+        self._background_tasks: set[asyncio.Task] = set()
 
     @property
     def is_running(self) -> bool:
@@ -109,12 +109,29 @@ class GCodeServer:
 
         self._active_connections.clear()
 
+        # Cancel all background tasks
+        for task in self._background_tasks:
+            task.cancel()
+
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+
+        self._background_tasks.clear()
+
         if self._server:
             self._server.close()
             await self._server.wait_closed()
             self._server = None
 
         logger.info("GCode Proxy Server stopped")
+
+    def run_background(self, coroutine: Coroutine) -> None:
+        """
+        Run the server in the background as a task.
+        """
+        response_task = asyncio.create_task(coroutine)
+        self._background_tasks.add(response_task)
+        response_task.add_done_callback(self._background_tasks.discard)
 
     async def _handle_client(
         self,
@@ -188,21 +205,12 @@ class GCodeServer:
             return False
 
         status_request_count = sum(
-            1 for task in list(self.task_queue._queue) if task.command.strip() == "?"
+            1 for task in list(self.device.task_queue._queue) if task.command.strip() == "?"
         )
 
         if status_request_count > 0:
             return True
         return False
-
-    async def handle_soft_reset(self, gcode: str) -> None:
-        if not detect_grbl_soft_reset(gcode):
-            return
-
-        logging.info("Soft reset received, clearing command queue")
-
-        if self.task_queue:
-            empty_queue(self.task_queue)
 
     async def _process_client_commands(
         self,
@@ -238,6 +246,7 @@ class GCodeServer:
                 raw_commands = data.decode("utf-8", errors="replace")
 
                 log_gcode(raw_commands, f"{client_address}", "command TCP request")
+                logger.debug(f"Received data from {client_address}: {raw_commands.strip()}")
 
                 # Split into individual commands (handle both \n and \r\n)
                 commands = [
@@ -252,19 +261,17 @@ class GCodeServer:
                 # Process each command by creating tasks and queuing them
                 for command in commands:
                     try:
-                        await self.handle_soft_reset(command)
                         if await self.rate_limit_status_request(command):
                             logging.debug(f"Dropping status `?` request from {client_address} to avoid flooding the device")
                             continue
 
                         # Check if queue is at or above the limit
-                        if self.task_queue.qsize() >= self.queue_limit:
-                            error_msg = f"error: command queue is full (limit: {self.queue_limit})"
+                        if self.device.queue_full():
                             logger.warning(
                                 f"Queue full, rejecting command from {client_address}: {command}"
                             )
                             try:
-                                error_response = f"{error_msg}\n"
+                                error_response = f"error: command queue is full (limit: {self.device.queue_maxsize()})"
                                 writer.write(error_response.encode("utf-8"))
                                 await writer.drain()
                             except Exception:
@@ -276,20 +283,15 @@ class GCodeServer:
                             command=command,
                             client_address=client_address,
                             writer=writer,
+                            queue_task=not is_immediate_grbl_command(command),
                         )
 
-                        # Add task to the queue
-                        await self.task_queue.put(task)
-                        logger.debug(
-                            f"Queued command from {client_address}: {repr(command)}; "
-                            + f"Queue size: {self.task_queue.qsize()}"
-                        )
+                        await self.device.do_task(task)
 
                         # Schedule response sending asynchronously without awaiting
                         # This allows the server to immediately process new incoming commands
-                        asyncio.create_task(
-                            self._send_response_when_ready(task, self.response_timeout)
-                        )
+                        self.run_background(
+                            self._send_response_when_ready(task, self.response_timeout))
 
                     except Exception as e:
                         error_msg = f"error: {e}"

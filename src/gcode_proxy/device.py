@@ -24,11 +24,14 @@ from .utils import (
     SerialConnectionError,
     clean_grbl_response,
     detect_grbl_terminator,
+    detect_grbl_soft_reset_command,
     find_serial_port_by_usb_id,
 )
 
+from .task_queue import create_task_queue, empty_queue
+
 if TYPE_CHECKING:
-    from .task_queue import Task, TaskQueue
+    from .task_queue import Task
 
 logger = logging.getLogger(__name__)
 gcode_logger = get_gcode_logger()
@@ -45,7 +48,7 @@ class GCodeDevice:
 
     def __init__(
         self,
-        task_queue: "TaskQueue | None" = None,
+        queue_size: int = 50,
         gcode_handler: GCodeHandler | None = None,
         response_handler: ResponseHandler | None = None,
         response_timeout: float = 30.0,
@@ -55,14 +58,14 @@ class GCodeDevice:
         Initialize the GCode device.
 
         Args:
-            task_queue: The TaskQueue to consume tasks from.
+            queue_size: Maximum number of commands allowed in the queue.
             gcode_handler: Custom handler for GCode commands.
             response_handler: Custom handler for serial responses.
             response_timeout: Timeout in seconds for waiting for device response.
             normalize_grbl_responses: Whether to normalize GRBL
                 responses (default: True).
         """
-        self.task_queue = task_queue
+        self.task_queue = create_task_queue(maxsize=queue_size)
         self.gcode_handler = gcode_handler or DefaultGCodeHandler()
         self.response_handler = response_handler or DefaultResponseHandler()
         self.response_timeout = response_timeout
@@ -72,27 +75,53 @@ class GCodeDevice:
         self._task_loop_task: asyncio.Task | None = None
         self._running = False
 
-        self.background_tasks = set()
+    async def handle_soft_reset(self, gcode: str) -> None:
+        if not detect_grbl_soft_reset_command(gcode):
+            return
 
-    def run_noncritical_task(self, coro: Coroutine):
-        """
-        Start a coroutine that we don't want to wait for as we move on to
-        next command in the queue
-        """
+        logging.info("Soft reset received, clearing command queue")
 
-        task = asyncio.create_task(coro)
-        self.background_tasks.add(task)
-        # Clean up when the task is done
-        task.add_done_callback(self.background_tasks.discard)
+        self.clear_queue()
 
-    def set_task_queue(self, task_queue: "TaskQueue") -> None:
+    async def do_task(self, task: "Task") -> None:
         """
-        Set the task queue for this device.
+        Process a task: queue it if needed or process it immediately
 
         Args:
-            task_queue: The TaskQueue to consume tasks from.
+            task: The task to process.
         """
-        self.task_queue = task_queue
+
+        logger.verbose(f"Received task: {repr(task)}")
+
+        if task.queue_task:
+            await self.task_queue.put(task)
+        else:
+            await self._process_task(task)
+
+    async def execute_task_now(self, task: "Task") -> None:
+        """
+        Execute a task immediately, bypassing the queue.
+
+        Args:
+            task: The task to execute.
+        """
+        await self._process_task(task)
+
+    def clear_queue(self) -> None:
+        """Clear all pending tasks from the queue."""
+        empty_queue(self.task_queue)
+
+    def queue_size(self) -> int:
+        """Get the current size of the task queue."""
+        return self.task_queue.qsize()
+
+    def queue_full(self) -> bool:
+        """Check if the task queue is full."""
+        return self.task_queue.full()
+
+    def queue_maxsize(self) -> int:
+        """Get the maximum size of the task queue."""
+        return self.task_queue.maxsize
 
     @property
     def is_connected(self) -> bool:
@@ -183,16 +212,26 @@ class GCodeDevice:
             asyncio.TimeoutError: If the device doesn't respond in time.
             SerialConnectionError: If the serial connection is not available.
         """
+
         sync_command = "G4 P0\n"
-        logger.debug("Injecting synchronization command: G4 P0")
 
-        log_gcode(sync_command, "server", "injected synchronization")
+        try:
+            logger.debug(f"Injecting synchronization command: {sync_command.strip()}")
+            log_gcode(sync_command, "server", "injected synchronization")
 
-        await self._send(sync_command)
-        sync_response = await self._receive()
+            await self._send(sync_command)
+            sync_response = await self._receive()
 
-        logger.debug(f"Synchronization response: {sync_response.strip()}")
-        return sync_response
+            logger.debug(f"Synchronization response: {sync_response.strip()}")
+            logger.info("Device task execution synchronized")
+            return sync_response
+
+        except asyncio.TimeoutError:
+            logger.warning("Timeout during device synchronization")
+            raise
+        except Exception as e:
+            logger.error(f"Error during device synchronization: {e}")
+            raise
 
     async def _process_task(self, task: "Task") -> None:
         """
@@ -219,37 +258,23 @@ class GCodeDevice:
             gcode += "\n"
 
         try:
+            await self.handle_soft_reset(gcode)
+
             # Pre-phase: Call the GCode handler and get behavior config
             handler_result = await self.gcode_handler.on_gcode_pre(gcode, client_address)
 
-            # Determine whether to send GCode to device based on trigger behavior
-            should_forward = True
-            fake_response = None
-            should_synchronize = False
-
-            if handler_result:
-                should_forward = handler_result.should_forward
-                fake_response = handler_result.fake_response
-                should_synchronize = handler_result.should_synchronize
+            should_forward = getattr(handler_result, "should_forward", True)
+            fake_response = getattr(handler_result, "fake_response", None)
+            should_synchronize = getattr(handler_result, "should_synchronize", False)
 
             # If synchronization is needed, inject G4 P0 before proceeding
             if should_synchronize:
-                try:
-                    logger.info("Starting device synchronization")
-                    await self._synchronize_device()
-                    logger.info("Device synchronization complete")
-                except asyncio.TimeoutError:
-                    logger.warning("Timeout during device synchronization")
-                    raise
-                except Exception as e:
-                    logger.error(f"Error during device synchronization: {e}")
-                    raise
-
+                await self._synchronize_device()
                 post_result = await self.gcode_handler.on_gcode_post(gcode, client_address)
 
                 if post_result:
                     # Merge pre and post responses
-                    if fake_response == "ok":
+                    if fake_response == "ok" and post_result != "ok":
                         fake_response = post_result
                     else:
                         fake_response = f"{fake_response} {post_result}"
@@ -263,15 +288,17 @@ class GCodeDevice:
             else:
                 log_gcode(task.command, source_address, "forwarded to device")
 
-                # Send to device and wait for response
+                # Send to device
                 await self._send(gcode)
                 logger.debug(f"Sent: {repr(gcode.strip())}")
 
-                device_response = await self._receive()
-                logger.debug(f"Received: {device_response.strip()}")
-                log_gcode(device_response, "device", "device clean response")
-
-                response = device_response
+                if task.wait_response:
+                    device_response = await self._receive()
+                    logger.debug(f"Received: {device_response.strip()}")
+                    log_gcode(device_response, "device", "device clean response")
+                    response = device_response
+                else:
+                    response = "ok"
 
             # Set the response on the task
             task.set_response(response)
@@ -279,7 +306,8 @@ class GCodeDevice:
             # Log the response
 
             # Notify response handler and wait for it to complete
-            await self.response_handler.on_response(response, gcode, client_address)
+            if task.wait_response:
+                await self.response_handler.on_response(response, gcode, client_address)
 
         except asyncio.TimeoutError:
             logger.warning(f"Timeout waiting for response to: {gcode.strip()}")
@@ -339,9 +367,7 @@ class GCodeSerialProtocol(asyncio.Protocol):
             normalize_grbl_responses: Whether to normalize GRBL responses.
         """
         self.transport: asyncio.Transport | None = None
-        self._response_event = asyncio.Event()
-        self._response_lines: list[str] = []
-        self._response_complete = False
+        self._response = asyncio.Future()
         self._buffer: str = ""
         self.normalize_grbl_responses = normalize_grbl_responses
 
@@ -354,8 +380,9 @@ class GCodeSerialProtocol(asyncio.Protocol):
         """Called when the connection is lost."""
         logger.debug(f"Serial connection lost: {exc}")
         self.transport = None
-        # Signal any waiting coroutines
-        self._response_event.set()
+
+        if self._response and not self._response.done():
+            self._response.set_result("error: device disconnected")
 
     def data_received(self, data: bytes) -> None:
         """
@@ -376,6 +403,8 @@ class GCodeSerialProtocol(asyncio.Protocol):
         self._buffer += data.decode("utf-8", errors="replace")
         lines = self._buffer.split("\n")
 
+        _response_lines = []
+
         # Process complete lines
         for line in lines:
             # Normalize GRBL responses if enabled
@@ -387,15 +416,17 @@ class GCodeSerialProtocol(asyncio.Protocol):
             if not decoded_line:
                 continue
 
+            _response_lines.append(decoded_line)
+
             # Check if line is a terminator
             if detect_grbl_terminator(decoded_line.lower()):
-                self._response_lines.append(decoded_line)
-                self._response_complete = True
-                self._response_event.set()
-                self._buffer = ""
-            else:
-                # Regular line, just add it
-                self._response_lines.append(decoded_line)
+                if self._response and not self._response.done():
+                    self._response.set_result(_response_lines)
+                self.flush_input()
+
+    def flush_input(self) -> None:
+        """Flush any buffered input data."""
+        self._buffer = ""
 
     def write(self, data: bytes) -> None:
         """
@@ -408,23 +439,9 @@ class GCodeSerialProtocol(asyncio.Protocol):
         if self.transport:
             self.transport.write(data)
 
-    def prepare_for_response(self) -> None:
-        """
-        Prepare to receive a response by clearing previous state.
-
-        This must be called BEFORE sending a command to avoid race conditions
-        where the device responds before wait_for_response() is called.
-        """
-        self._response_lines = []
-        self._response_complete = False
-        self._response_event.clear()
-
     async def wait_for_response(self, timeout: float) -> str:
         """
         Wait for a complete response from the device.
-
-        Note: prepare_for_response() must be called before sending the command
-        to avoid race conditions.
 
         Args:
             timeout: Timeout in seconds.
@@ -432,16 +449,11 @@ class GCodeSerialProtocol(asyncio.Protocol):
         Returns:
             The complete response string.
         """
-        try:
-            await asyncio.wait_for(self._response_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            if not self._response_lines:
-                logger.debug("No response received within timeout")
 
-        response = "\n".join(self._response_lines)
-        self._response_lines = []
+        self._response = asyncio.Future()
+        response_lines = await asyncio.wait_for(self._response, timeout=timeout)
+        response = "\n".join(response_lines)
         return response
-
 
 class GCodeSerialDevice(GCodeDevice):
     """
@@ -456,7 +468,7 @@ class GCodeSerialDevice(GCodeDevice):
         usb_id: str | None = None,
         dev_path: str | None = None,
         baud_rate: int = 115200,
-        task_queue: "TaskQueue | None" = None,
+        queue_size: int = 50,
         gcode_handler: GCodeHandler | None = None,
         response_handler: ResponseHandler | None = None,
         response_timeout: float = 30.0,
@@ -471,7 +483,7 @@ class GCodeSerialDevice(GCodeDevice):
             usb_id: USB device ID in vendor:product format (mutually exclusive with dev_path).
             dev_path: Device path like /dev/ttyACM0 (mutually exclusive with usb_id).
             baud_rate: Serial baud rate for communication.
-            task_queue: The TaskQueue to consume tasks from.
+            queue_size: Maximum number of commands allowed in the queue.
             gcode_handler: Custom handler for GCode commands.
             response_handler: Custom handler for serial responses.
             response_timeout: Timeout in seconds for waiting for device response.
@@ -487,9 +499,11 @@ class GCodeSerialDevice(GCodeDevice):
             raise ValueError("Must specify either usb_id or dev_path")
 
         super().__init__(
-            task_queue=task_queue,
+            queue_size=queue_size,
             gcode_handler=gcode_handler,
             response_handler=response_handler,
+            response_timeout=response_timeout,
+            normalize_grbl_responses=normalize_grbl_responses,
         )
 
         self.usb_id = usb_id
@@ -590,7 +604,7 @@ class GCodeSerialDevice(GCodeDevice):
         await asyncio.sleep(self.initialization_delay)
 
         # Clear any buffered data
-        self._protocol._response_lines = []
+        self._protocol.flush_input()
 
     async def _send(self, gcode: str) -> None:
         """
@@ -606,7 +620,6 @@ class GCodeSerialDevice(GCodeDevice):
             raise SerialConnectionError("Serial protocol is not available")
 
         # Prepare to receive response BEFORE sending to avoid race conditions
-        self._protocol.prepare_for_response()
         self._protocol.write(gcode.encode("utf-8"))
 
     async def _receive(self) -> str:
