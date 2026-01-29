@@ -4,14 +4,15 @@ Utility functions for GCode Proxy.
 This module provides utility functions for serial device discovery and communication.
 """
 
-import logging
+import asyncio
 import re
 
 import serial
 import serial.tools.list_ports
 
-logger = logging.getLogger(__name__)
+from gcode_proxy.core.logging import get_logger
 
+logger = get_logger()
 
 class SerialDeviceNotFoundError(Exception):
     """Raised when the specified USB device cannot be found."""
@@ -43,7 +44,7 @@ def find_serial_port_by_usb_id(usb_id: str) -> str:
         vendor_id_int = int(vendor_id, 16)
         product_id_int = int(product_id, 16)
     except (ValueError, AttributeError) as e:
-        raise SerialDeviceNotFoundError(
+        raise AttributeError(
             f"Invalid USB ID format '{usb_id}'. \
               Expected format: 'vendor:product' (e.g., '303a:4001')"
         ) from e
@@ -52,7 +53,7 @@ def find_serial_port_by_usb_id(usb_id: str) -> str:
 
     for port in ports:
         if port.vid == vendor_id_int and port.pid == product_id_int:
-            logger.info(f"Found device {usb_id} at {port.device}")
+            logger.debug(f"Found device {usb_id} at {port.device}")
             return port.device
 
     # List available devices for debugging
@@ -61,13 +62,64 @@ def find_serial_port_by_usb_id(usb_id: str) -> str:
         for p in ports
         if p.vid is not None and p.pid is not None
     ]
-    logger.error(f"Device {usb_id} not found. Available devices: {available}")
+
+    logger.debug(f"Device {usb_id} not found. Available devices: {available}")
 
     raise SerialDeviceNotFoundError(
         f"USB device with ID '{usb_id}' not found. "
         f"Available USB serial devices: {available or 'none'}"
     )
 
+async def wait_for_device(
+    usb_id: str | None = None,
+    dev_path: str | None = None,
+    poll_interval: float = 1.0,
+) -> str:
+    """
+    Wait for a device to become available, polling at regular intervals.
+
+    If a USB ID is provided, polls for devices with that ID. If a device path
+    is provided, polls for the existence of that path. At least one must be provided.
+
+    Polling is done quietly without logging spam. Device discovery is only logged
+    when found or when the list of available devices changes.
+
+    Args:
+        usb_id: USB device ID in vendor:product format (e.g., "303a:4001").
+        dev_path: Device path like /dev/ttyACM0.
+        timeout: Maximum time to wait in seconds. None means wait forever
+            (default: None).
+        poll_interval: Time between polls in seconds (default: 1.0).
+
+    Returns:
+        The device path when found.
+
+    Raises:
+        asyncio.CancelledError: If the polling task is cancelled (e.g., on shutdown).
+        SerialDeviceNotFoundError: If device is not found within timeout.
+        ValueError: If neither usb_id nor dev_path are provided.
+    """
+    if not usb_id and not dev_path:
+        raise ValueError("Must specify either usb_id or dev_path")
+
+    while True:
+        try:
+            if usb_id:
+                return find_serial_port_by_usb_id(usb_id)
+            else:
+                # Check if the specified device path exists
+                try:
+                    with serial.Serial(dev_path) as _:
+                        return dev_path
+                except (serial.SerialException, FileNotFoundError):
+                    pass  # Device not found yet
+
+        except asyncio.CancelledError:
+            logger.debug("Device wait task cancelled")
+        except SerialDeviceNotFoundError:
+            pass  # Continue polling
+
+        await asyncio.sleep(poll_interval)
 
 GRBL_CONTENT_RE = re.compile(
     r"^.*?(\d+\.\d+|\$.*|ok|error:\d+|ALARM:\d+|<[^>]+>|\[MSG:[^\]]+\]|Grbl\s\d+\.\d+.*)$",

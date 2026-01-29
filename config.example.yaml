@@ -43,22 +43,33 @@ device:
   # Environment variable: DEVICE_BAUD_RATE
   baud-rate: 115200
 
-  # Device initialization delay in seconds
+  # Device initialization delay in ms
   # Some devices need time to initialize after connection
   # Environment variable: DEVICE_SERIAL_DELAY
-  serial-delay: 0.1
+  serial-delay: 100 #ms
 
-  # Timeout in seconds for waiting for device response
+  # Timeout in ms for waiting for device response
   # Increase this value if your device needs more time to respond to commands
   # Environment variable: DEVICE_RESPONSE_TIMEOUT
-  response-timeout: 120.0
+  response-timeout: 120000.0 #ms
 
-  # Normalize GRBL responses by cleaning ESP logs
-  # When enabled, ESP log output that clobbers serial communication is removed,
-  # ensuring clean GRBL responses are sent to clients. This is enabled by default
-  # but can be disabled if it causes issues with your specific device.
-  # Environment variable: DEVICE_NORMALIZE_GRBL_RESPONSES
-  normalize-grbl-responses: true
+  # Period in ms for pinging device with `?` command
+  # The `?` command requests a status report from the device, allowing the proxy
+  # to track device state (machine position, work position, buffer status, etc.).
+  # Default: 200ms (5Hz as recommended in GRBL specification)
+  # Environment variable: DEVICE_LIVENESS_PERIOD
+  liveness-period: 200 #ms
+
+  # Suppress 'ok' responses from `?` commands
+  # Some GRBL devices respond with 'ok' to the `?` status request command, which is
+  # non-standard and conflicts with the buffer fill character counting algorithm.
+  # When enabled (default), these unexpected 'ok' responses are swallowed and not
+  # counted towards buffer management. Set to false if your device doesn't emit
+  # these responses, or if you need the status request 'ok' responses for other reasons.
+  # Environment variable: DEVICE_SWALLOW_REALTIME_OK
+  swallow-realtime-ok: true
+
+
 
 # GCode communication log file
 # Optional path to a file where all GCode commands sent to the device
@@ -67,6 +78,7 @@ device:
 # If the file exists, new entries are appended to the end.
 # Environment variable: GCODE_LOG_FILE
 gcode-log-file: gcode.log
+tcp-log-file: tcp.log
 
 # Custom triggers for executing external commands in response to GCode patterns
 # Triggers allow you to integrate external systems (scripts, Home Assistant, etc.)
@@ -79,14 +91,14 @@ custom-triggers:
   #   trigger:
   #     type: gcode # -- trigger type (only gcode for now)
   #     match: M8 # -- regex pattern to match on gcode occurrence
- 
+
   #     behavior: "" # -- [ forward | capture | capture-nowait ]
   ##      -- forward: Send gcode to device, execute trigger async, return device response
   ##      -- capture (default): Don't send gcode to device, execute trigger, return fake response (ok or error)
   ##      -- capture-nowait: Don't send gcode to device, execute trigger async, return ok immediately
-  
+
   #     synchronize: false # -- whether to force execution timing synchronization (default: false)
-  #       -- If true, the trigger injects a `G4 P0` command to the device and waits for a response 
+  #       -- If true, the trigger injects a `G4 P0` command to the device and waits for a response
   #          before executing the trigger. This forces all prior commands in the device device buffer
   #          to finish before trigger command execution.
 

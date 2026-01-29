@@ -6,16 +6,19 @@ and forwards GCode commands to the task queue for processing by the device.
 """
 
 import asyncio
-from collections.abc import Coroutine
-import logging
+import socket
+from math import log
+from typing import TYPE_CHECKING
 
-from gcode_proxy.utils import is_immediate_grbl_command
-from .device import GCodeDevice
-from .task_queue import Task
-from .connection_manager import ConnectionManager
-from gcode_proxy.logging import log_gcode
+from gcode_proxy.core.connection_manager import ConnectionManager
+from gcode_proxy.core.logging import get_logger, log_tcp_recv
+from gcode_proxy.core.task import GCodeTask, Task
+from gcode_proxy.device import GCodeDevice
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from gcode_proxy.trigger import TriggerManager
+
+logger = get_logger()
 
 
 class GCodeServer:
@@ -23,7 +26,8 @@ class GCodeServer:
     Async TCP server for receiving GCode commands from clients.
 
     This server accepts TCP connections, reads GCode commands,
-    creates tasks and adds them to the queue for processing by the device.
+    consults the trigger manager to build tasks, and forwards them
+    to the device for processing.
     """
 
     def __init__(
@@ -32,7 +36,7 @@ class GCodeServer:
         address: str = "0.0.0.0",
         port: int = 8080,
         response_timeout: float = 30.0,
-        normalize_grbl_responses: bool = True,
+        trigger_manager: "TriggerManager | None" = None,
     ):
         """
         Initialize the GCode server.
@@ -42,14 +46,13 @@ class GCodeServer:
             address: The address to bind the server to.
             port: The port to listen on.
             response_timeout: Timeout in seconds for waiting for device response.
-            normalize_grbl_responses: Whether to normalize GRBL
-                responses (default: True).
+            trigger_manager: Optional TriggerManager for matching triggers.
         """
         self.device = device
         self.address = address
         self.port = port
         self.response_timeout = response_timeout
-        self.normalize_grbl_responses = normalize_grbl_responses
+        self.trigger_manager = trigger_manager
 
         self._server: asyncio.Server | None = None
         self._running = False
@@ -81,6 +84,9 @@ class GCodeServer:
 
         addrs = ", ".join(str(sock.getsockname()) for sock in self._server.sockets)
         logger.info(f"GCode Proxy Server started on {addrs}")
+
+        for sock in self._server.sockets:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
     async def serve_forever(self) -> None:
         """
@@ -125,14 +131,6 @@ class GCodeServer:
             self._server = None
 
         logger.info("GCode Proxy Server stopped")
-
-    def run_background(self, coroutine: Coroutine) -> None:
-        """
-        Run the server in the background as a task.
-        """
-        response_task = asyncio.create_task(coroutine)
-        self._background_tasks.add(response_task)
-        response_task.add_done_callback(self._background_tasks.discard)
 
     async def _handle_client(
         self,
@@ -179,26 +177,6 @@ class GCodeServer:
 
             logger.info(f"Client disconnected: {client_address}")
 
-
-
-    async def rate_limit_status_request(self, gcode: str) -> bool:
-        """
-        Count the currently queued status requests and signal a drop for the new one if needed
-        """
-
-        if gcode.strip() != "?":
-            return False
-
-        # Accessing private _queue to peek without consuming
-        queue_items = list(self.device.task_queue._queue)  # type: ignore
-        status_request_count = sum(
-            1 for task in queue_items if task.command.strip() == "?"
-        )
-
-        if status_request_count > 0:
-            return True
-        return False
-
     async def _process_client_commands(
         self,
         reader: asyncio.StreamReader,
@@ -208,9 +186,11 @@ class GCodeServer:
         """
         Process GCode commands from a client connection.
 
-        Reads commands from the client, creates tasks, adds them to the queue,
-        and schedules response sending asynchronously. This allows new commands
-        to be queued and logged immediately without blocking on device responses.
+        For each command received:
+        1. Consult the trigger manager to see if any triggers match
+        2. If triggers match, create the tasks they specify
+        3. If no triggers match, create a simple GCodeTask
+        4. Queue all tasks for the device to process
 
         Args:
             reader: The stream reader for the client connection.
@@ -232,8 +212,8 @@ class GCodeServer:
                 # Decode and process the GCode commands
                 raw_commands = data.decode("utf-8", errors="replace")
 
-                log_gcode(raw_commands, f"{client_address}", "command TCP request")
-                logger.debug(f"Received data from {client_address}: {raw_commands.strip()}")
+                logger.verbose(f"Received data from {client_address}: {raw_commands.strip()}")
+                log_tcp_recv(raw_commands.strip(), client_address)
 
                 # Split into individual commands (handle both \n and \r\n)
                 commands = [
@@ -245,37 +225,10 @@ class GCodeServer:
                 if not commands:
                     continue
 
-                # Process each command by creating tasks and queuing them
+                # Process each command by checking triggers and building tasks
                 for command in commands:
                     try:
-                        if await self.rate_limit_status_request(command):
-                            logging.debug(
-                                f"Dropping status `?` request from {client_address} "
-                                "to avoid flooding the device"
-                            )
-                            continue
-
-                        # Check if queue is at or above the limit
-                        if self.device.queue_full():
-                            logger.warning(
-                                f"Queue full, rejecting command from {client_address}: {command}"
-                            )
-                            try:
-                                limit = self.device.queue_maxsize()
-                                error_response = f"error: command queue is full (limit: {limit})"
-                                ConnectionManager().communicate(error_response, client_uuid)
-                            except Exception:
-                                pass
-                            continue
-
-                        # Create a task for this command
-                        task = Task(
-                            command=command,
-                            client_uuid=client_uuid,
-                            queue_task=not is_immediate_grbl_command(command),
-                        )
-
-                        await self.device.do_task(task)
+                        await self._queue_command(command, client_uuid, client_address)
 
                     except Exception as e:
                         error_msg = f"error: {e}"
@@ -287,7 +240,7 @@ class GCodeServer:
                             pass
 
             except asyncio.TimeoutError:
-                logger.debug(f"Client {client_address} idle timeout")
+                logger.debug(f"Client {client_address} data read idle timeout")
                 break
             except ConnectionResetError:
                 logger.debug(f"Client {client_address} connection reset")
@@ -300,3 +253,52 @@ class GCodeServer:
                 except Exception:
                     pass
                 break
+
+    async def _queue_command(
+        self,
+        command: str,
+        client_uuid: str,
+        client_address: tuple[str, int],
+    ) -> None:
+        """
+        Queue a command by checking triggers and building appropriate tasks.
+
+        If triggers match, builds tasks from trigger configuration.
+        If no triggers match, creates a simple GCodeTask.
+
+        Args:
+            command: The GCode command string.
+            client_uuid: The UUID of the client.
+            client_address: The client's address tuple.
+        """
+        # Check if queue is at limit before processing
+        if self.device.queue_full():
+            logger.warning(f"Queue full, rejecting command from {client_address}: {command}")
+            try:
+                limit = self.device.queue_maxsize()
+                error_response = f"error: command queue is full (limit: {limit})"
+                ConnectionManager().communicate(error_response, client_uuid)
+            except Exception:
+                pass
+            return
+
+        # Check for triggers if trigger manager is available
+        tasks_to_queue: list[Task] | None = None
+        if self.trigger_manager:
+            tasks_to_queue = self.trigger_manager.build_tasks_for_gcode(
+                command,
+                client_uuid,
+            )
+
+        # If no triggers matched, create a simple GCodeTask
+        if tasks_to_queue is None:
+            task = GCodeTask(
+                client_uuid=client_uuid,
+                gcode=command,
+                should_respond=True,
+            )
+            tasks_to_queue = [task]
+
+        # Queue all tasks for processing
+        for task in tasks_to_queue:
+            await self.device.do_task(task)

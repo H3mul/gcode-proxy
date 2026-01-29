@@ -9,7 +9,6 @@ This module provides the CLI using Click, supporting configuration via:
 """
 
 import asyncio
-import logging
 import signal
 import sys
 from pathlib import Path
@@ -17,24 +16,26 @@ from typing import Any
 
 import click
 
-from .config import (
+from gcode_proxy.core.config import (
     DEFAULT_CONFIG_PATH,
     ENV_CONFIG_FILE,
     ENV_DEVICE_BAUD_RATE,
     ENV_DEVICE_DEV_PATH,
+    ENV_DEVICE_LIVENESS_PERIOD,
     ENV_DEVICE_RESPONSE_TIMEOUT,
     ENV_DEVICE_SERIAL_DELAY,
+    ENV_DEVICE_SWALLOW_REALTIME_OK,
     ENV_DEVICE_USB_ID,
     ENV_GCODE_LOG_FILE,
+    ENV_TCP_LOG_FILE,
     ENV_SERVER_ADDRESS,
     ENV_SERVER_PORT,
     ENV_SERVER_QUEUE_LIMIT,
-    ENV_DEVICE_NORMALIZE_GRBL_RESPONSES,
     Config,
 )
-from .logging import setup_logging
-from .service import GCodeProxyService
-from .trigger_manager import TriggerManager
+from gcode_proxy.core.logging import setup_logging, get_logger
+from gcode_proxy.core.service import GCodeProxyService
+from gcode_proxy.trigger import TriggerManager
 
 
 @click.command()
@@ -65,15 +66,6 @@ from .trigger_manager import TriggerManager
     help=f"Command queue size limit (default: 50). [env: {ENV_SERVER_QUEUE_LIMIT}]",
 )
 @click.option(
-    "--normalize-grbl-responses/--no-normalize-grbl-responses",
-    "normalize_grbl_responses",
-    default=None,
-    help=(
-        f"Normalize GRBL responses by cleaning ESP logs (default: on). "
-        f"[env: {ENV_DEVICE_NORMALIZE_GRBL_RESPONSES}]"
-    ),
-)
-@click.option(
     "-d", "--device", "--usb-id",
     "usb_id",
     type=str,
@@ -100,15 +92,33 @@ from .trigger_manager import TriggerManager
     "--serial-delay",
     type=float,
     default=None,
-    help=f"Device initialization delay in seconds. [env: {ENV_DEVICE_SERIAL_DELAY}]",
+    help=f"Device initialization delay in ms. [env: {ENV_DEVICE_SERIAL_DELAY}]",
 )
 @click.option(
     "--response-timeout",
     type=float,
     default=None,
     help=(
-        f"Timeout in seconds for waiting for device response (default: 30s). "
+        f"Timeout in ms for waiting for device response (default: 30s). "
         f"[env: {ENV_DEVICE_RESPONSE_TIMEOUT}]"
+    ),
+)
+@click.option(
+    "--liveness-period",
+    type=float,
+    default=None,
+    help=(
+        f"Period in ms for pinging device with `?` command (default: 200ms). "
+        f"[env: {ENV_DEVICE_LIVENESS_PERIOD}]"
+    ),
+)
+@click.option(
+    "--swallow-realtime-ok",
+    type=bool,
+    default=None,
+    help=(
+        f"Suppress 'ok' responses from `?` commands to avoid buffer conflicts "
+        f"(default: true). [env: {ENV_DEVICE_SWALLOW_REALTIME_OK}]"
     ),
 )
 @click.option(
@@ -116,6 +126,12 @@ from .trigger_manager import TriggerManager
     type=click.Path(path_type=Path),
     default=None,
     help=f"Path to file for logging all GCode communication. [env: {ENV_GCODE_LOG_FILE}]",
+)
+@click.option(
+    "--tcp-log-file",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=f"Path to file for logging all TCP communication. [env: {ENV_TCP_LOG_FILE}]",
 )
 @click.option(
     "--dry-run",
@@ -147,13 +163,15 @@ def main(
     port: int | None,
     address: str | None,
     queue_limit: int | None,
-    normalize_grbl_responses: bool | None,
     usb_id: str | None,
     dev_path: str | None,
     baud_rate: int | None,
     serial_delay: float | None,
     response_timeout: float | None,
+    liveness_period: float | None,
+    swallow_realtime_ok: bool | None,
     gcode_log_file: Path | None,
+    tcp_log_file: Path | None,
     dry_run: bool,
     verbose: int,
     quiet: bool,
@@ -191,9 +209,9 @@ def main(
         # Generate a default config file
         gcode-proxy-server --generate-config
     """
-    # Set up logging first
+    # Set up basic logging first (before config is loaded)
     setup_logging(verbosity_level=verbose, quiet=quiet)
-    logger = logging.getLogger(__name__)
+    logger = get_logger()
 
     # Build CLI args dict for config loading
     cli_args: dict[str, Any] = {}
@@ -203,8 +221,6 @@ def main(
         cli_args["address"] = address
     if queue_limit is not None:
         cli_args["queue_limit"] = queue_limit
-    if normalize_grbl_responses is not None:
-        cli_args["normalize_grbl_responses"] = normalize_grbl_responses
     if usb_id is not None:
         cli_args["usb_id"] = usb_id
     if dev_path is not None:
@@ -217,8 +233,17 @@ def main(
     if response_timeout is not None:
         cli_args["response_timeout"] = response_timeout
 
+    if liveness_period is not None:
+        cli_args["liveness_period"] = liveness_period
+
+    if swallow_realtime_ok is not None:
+        cli_args["swallow_realtime_ok"] = swallow_realtime_ok
+
     if gcode_log_file is not None:
         cli_args["gcode_log_file"] = str(gcode_log_file)
+
+    if tcp_log_file is not None:
+        cli_args["tcp_log_file"] = str(tcp_log_file)
 
     try:
         # Load configuration (skip device validation in dry-run mode)
@@ -230,6 +255,14 @@ def main(
     except ValueError as e:
         logger.error(f"Configuration error: {e}")
         sys.exit(1)
+
+    # Now set up file logging with the loaded configuration
+    setup_logging(
+        verbosity_level=verbose,
+        quiet=quiet,
+        gcode_log_file=config.gcode_log_file,
+        tcp_log_file=config.tcp_log_file,
+    )
 
     # Handle --generate-config
     if generate_config:
@@ -249,13 +282,16 @@ def main(
     else:
         device_info = config.device.path if config.device.path else config.device.usb_id
         logger.info(f"  Device: {device_info} @ {config.device.baud_rate} baud")
-        logger.info(f"  Serial delay: {config.device.serial_delay}s")
-        logger.info(f"  Response timeout: {config.device.response_timeout}s")
+        logger.info(f"  Serial delay: {config.device.serial_delay}ms")
+        logger.info(f"  Response timeout: {config.device.response_timeout}ms")
+        logger.info(f"  Liveness period: {config.device.liveness_period}ms")
+        logger.info(f"  Swallow realtime ok: {config.device.swallow_realtime_ok}")
     logger.info(f"  Server: {config.server.address}:{config.server.port}")
     logger.info(f"  Queue limit: {config.server.queue_limit}")
-    logger.info(f"  Normalize GRBL responses: {config.device.normalize_grbl_responses}")
     if config.gcode_log_file:
         logger.info(f"  GCode log file: {config.gcode_log_file}")
+    if config.tcp_log_file:
+        logger.info(f"  TCP log file: {config.tcp_log_file}")
     if config.custom_triggers:
         logger.info(f"  Custom triggers: {len(config.custom_triggers)} configured")
 
@@ -273,11 +309,8 @@ def main(
         service = GCodeProxyService.create_dry_run(
             address=config.server.address,
             port=config.server.port,
-            response_timeout=config.device.response_timeout,
-            gcode_handler=trigger_manager,
             gcode_log_file=config.gcode_log_file,
             queue_limit=config.server.queue_limit,
-            normalize_grbl_responses=config.device.normalize_grbl_responses,
         )
     else:
         # Either usb_id or dev_path is guaranteed to be set after validation
@@ -287,13 +320,12 @@ def main(
             dev_path=config.device.path,
             baud_rate=config.device.baud_rate,
             serial_delay=config.device.serial_delay,
-            response_timeout=config.device.response_timeout,
             address=config.server.address,
             port=config.server.port,
-            gcode_handler=trigger_manager,
             gcode_log_file=config.gcode_log_file,
             queue_limit=config.server.queue_limit,
-            normalize_grbl_responses=config.device.normalize_grbl_responses,
+            liveness_period=config.device.liveness_period,
+            swallow_realtime_ok=config.device.swallow_realtime_ok,
         )
         service.trigger_manager = trigger_manager
 
@@ -332,7 +364,7 @@ async def run_service(service: GCodeProxyService) -> None:
     Args:
         service: The GCodeProxyService instance to run.
     """
-    logger = logging.getLogger(__name__)
+    logger = get_logger()
 
     # Set up async signal handlers on Unix
     loop = asyncio.get_running_loop()
@@ -343,21 +375,23 @@ async def run_service(service: GCodeProxyService) -> None:
         logger.info("Shutdown signal received")
         stop_event.set()
 
+    async def shutdown_service_on_stop() -> None:
+        await stop_event.wait()
+
+        # Clean shutdown
+        await service.stop()
+
+    asyncio.create_task(shutdown_service_on_stop())
+
     if sys.platform != "win32":
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, signal_handler)
 
     try:
-        # Start the service
         await service.start()
-
-        # Wait for stop signal or server to finish
         await stop_event.wait()
-
-    finally:
-        # Clean shutdown
-        await service.stop()
-
+    except asyncio.CancelledError:
+        pass
 
 if __name__ == "__main__":
     main()
