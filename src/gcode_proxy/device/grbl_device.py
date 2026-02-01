@@ -9,7 +9,6 @@ counting protocol to manage device buffer quota and handles real-time commands.
 import asyncio
 from enum import Enum
 
-from _pytest.assertion.rewrite import assertstate_key
 import serial_asyncio
 
 from gcode_proxy.core.connection_manager import ConnectionManager
@@ -20,15 +19,15 @@ from gcode_proxy.core.utils import (
     wait_for_device,
 )
 from gcode_proxy.device.device import GCodeDevice
-from gcode_proxy.device.interface import GCodeSerialProtocol
 from gcode_proxy.device.grbl_device_status import GrblDeviceState, GrblDeviceStatus, HomingStatus
+from gcode_proxy.device.interface import GCodeSerialProtocol
 
 logger = get_logger()
 
-MAX_RESPONSE_QUEUE_SIZE = 1000 #serial input lines
-DEFAULT_GRBL_BUFFER_SIZE = 128 #bytes
-DEFAULT_LIVENESS_PERIOD = 1000 #ms
-CONFIRMATION_DELIVERY_GRACE_PERIOD = 200 #ms
+MAX_RESPONSE_QUEUE_SIZE = 1000  # serial input lines
+DEFAULT_GRBL_BUFFER_SIZE = 128  # bytes
+DEFAULT_LIVENESS_PERIOD = 1000  # ms
+CONFIRMATION_DELIVERY_GRACE_PERIOD = 200  # ms
 
 
 class StatusBehavior(Enum):
@@ -66,11 +65,11 @@ class GrblDevice(GCodeDevice):
         baud_rate: int = 115200,
         queue_size: int = 50,
         read_buffer_size: int = 4096,
-        initialization_delay: float = 100.0, #ms
+        initialization_delay: float = 100.0,  # ms
         grbl_buffer_size: int = DEFAULT_GRBL_BUFFER_SIZE,
-        liveness_period: float = DEFAULT_LIVENESS_PERIOD, #ms
+        liveness_period: float = DEFAULT_LIVENESS_PERIOD,  # ms
         swallow_realtime_ok: bool = True,
-        device_discovery_poll_interval: float = 1000, #ms
+        device_discovery_poll_interval: float = 1000,  # ms
         status_behavior: StatusBehavior | str = StatusBehavior.FORWARD,
     ):
         """
@@ -136,8 +135,6 @@ class GrblDevice(GCodeDevice):
         self._liveness_task: asyncio.Task | None = None
         self._wait_for_device_task: asyncio.Task | None = None
         self._skippable_oks: int = 0
-
-        self._device_idle_event = asyncio.Event()
 
         # Flow control for Hold state - allows pausing/resuming task processing
         self._resume_event = asyncio.Event()
@@ -384,8 +381,8 @@ class GrblDevice(GCodeDevice):
                     # Track homing operations specially
                     if self._is_homing(task) and self._device_state:
                         logger.debug(
-                           "Starting homing tracking, waiting for status to return" +
-                           f" to Idle from Home; task: {repr(task)}"
+                            "Starting homing tracking, waiting for status to return"
+                            + f" to Idle from Home; task: {repr(task)}"
                         )
                         self._device_state.homing = HomingStatus.QUEUED
 
@@ -705,19 +702,10 @@ class GrblDevice(GCodeDevice):
                         and self._device_state
                         and self._device_state.homing == HomingStatus.COMPLETE
                     ):
-                        logger.info(
-                            "Homing 'ok' lost, completing homing task based on Idle"
-                        )
+                        logger.info("Homing 'ok' lost, completing homing task based on Idle")
                         await self._handle_task_completion("ok", success=True)
 
                 asyncio.create_task(complete_homing_task())
-
-            if self._device_state.status == GrblDeviceStatus.IDLE.value:
-                logger.debug("Device setting idle event")
-                self._device_idle_event.set()
-            else:
-                logger.debug("Device clearing idle event")
-                self._device_idle_event.clear()
 
     async def _handle_task_completion(self, response_line: str, success: bool) -> None:
         """
