@@ -22,7 +22,7 @@ class Task:
         client_uuid: UUID of the client connection.
         should_respond: Whether a response should be sent back to the client.
     """
-    client_uuid: str | None
+    client_uuid: str | None = None
     should_respond: bool = True
     char_count: int = 0
 
@@ -56,6 +56,8 @@ class GCodeTask(Task):
         gcode: The GCode command string to execute.
         char_count: Number of characters in the gcode (including newline).
                    Calculated automatically during initialization.
+        buffer_pause: Whether to pause loading buffer after this command.
+                        This is used for sync trigger commands.
     """
 
     gcode: str = ""
@@ -84,6 +86,7 @@ class ShellTask(Task):
 
     id: str = ""
     command: str = ""
+    wait_for_idle: bool = False
 
     async def execute(self) -> tuple[bool, str | None]:
         """

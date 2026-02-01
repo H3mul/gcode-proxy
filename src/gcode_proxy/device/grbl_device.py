@@ -9,6 +9,7 @@ counting protocol to manage device buffer quota and handles real-time commands.
 import asyncio
 from enum import Enum
 
+from _pytest.assertion.rewrite import assertstate_key
 import serial_asyncio
 
 from gcode_proxy.core.connection_manager import ConnectionManager
@@ -113,6 +114,9 @@ class GrblDevice(GCodeDevice):
         self.grbl_buffer_size = grbl_buffer_size
         self.liveness_period = liveness_period / 1000
         self.swallow_realtime_ok = swallow_realtime_ok
+
+        self.buffer_paused: bool = False
+
         # Convert string to enum if needed
         if isinstance(status_behavior, str):
             self.status_behavior = StatusBehavior(status_behavior)
@@ -132,6 +136,8 @@ class GrblDevice(GCodeDevice):
         self._liveness_task: asyncio.Task | None = None
         self._wait_for_device_task: asyncio.Task | None = None
         self._skippable_oks: int = 0
+
+        self._device_idle_event = asyncio.Event()
 
         # Flow control for Hold state - allows pausing/resuming task processing
         self._resume_event = asyncio.Event()
@@ -351,7 +357,7 @@ class GrblDevice(GCodeDevice):
 
         This method will block if the buffer is full and no responses are incoming.
         """
-        while self._running and self._buffer_quota > 0:
+        while self._running and self._buffer_quota > 0 and not self.buffer_paused:
             # Check if we're in Hold state - wait for resume event if so
             if not self._resume_event.is_set():
                 logger.debug("Device in Hold state, pausing task processing")
@@ -383,6 +389,16 @@ class GrblDevice(GCodeDevice):
                         )
                         self._device_state.homing = HomingStatus.QUEUED
 
+                if isinstance(task, ShellTask) and task.wait_for_idle:
+                    logger.debug(
+                        f"Injecting dwell before executing shell task and pausing buffer fill: "
+                        f"{task.id}"
+                    )
+                    self.buffer_paused = True
+                    dwell_task = GCodeTask(gcode="G4 P0\n")
+                    self._in_flight_queue.append(dwell_task)
+                    await self._send(dwell_task.gcode)
+
                 # Deduct from quota and add to in-flight
                 self._buffer_quota -= task.char_count
                 self._in_flight_queue.append(task)
@@ -396,14 +412,15 @@ class GrblDevice(GCodeDevice):
                 # Mark as done in the queue
                 self.task_queue.task_done()
 
-                # Drain any non-GCodeTasks so that we only wait for gcode task completion
-                await self._drain_non_gcode_tasks()
-
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.error(f"Error filling device buffer: {e}")
                 break
+
+        # After filling buffer, drain any non-GCodeTasks
+        # To make sure we are only waiting on GCode tasks in-flight
+        await self._drain_non_gcode_tasks()
 
     async def _response_loop(self) -> None:
         """
@@ -695,6 +712,13 @@ class GrblDevice(GCodeDevice):
 
                 asyncio.create_task(complete_homing_task())
 
+            if self._device_state.status == GrblDeviceStatus.IDLE.value:
+                logger.debug("Device setting idle event")
+                self._device_idle_event.set()
+            else:
+                logger.debug("Device clearing idle event")
+                self._device_idle_event.clear()
+
     async def _handle_task_completion(self, response_line: str, success: bool) -> None:
         """
         Handle completion of a task based on device response.
@@ -755,6 +779,10 @@ class GrblDevice(GCodeDevice):
             shell_task = self._in_flight_queue.pop(0)
 
             if isinstance(shell_task, ShellTask):
+                if shell_task.wait_for_idle:
+                    # Resume buffer filling, this task caused it to pause
+                    self.buffer_paused = False
+
                 logger.debug(f"Executing shell task during drain: {shell_task.id}")
                 response = ""
                 try:
