@@ -7,16 +7,12 @@ and forwards GCode commands to the task queue for processing by the device.
 
 import asyncio
 import socket
-from math import log
-from typing import TYPE_CHECKING
 
 from gcode_proxy.core.connection_manager import ConnectionManager
 from gcode_proxy.core.logging import get_logger, log_tcp_recv
 from gcode_proxy.core.task import GCodeTask, Task
 from gcode_proxy.device import GCodeDevice
-
-if TYPE_CHECKING:
-    from gcode_proxy.trigger import TriggerManager
+from gcode_proxy.trigger import TriggerManager
 
 logger = get_logger()
 
@@ -36,7 +32,6 @@ class GCodeServer:
         address: str = "0.0.0.0",
         port: int = 8080,
         response_timeout: float = 30.0,
-        trigger_manager: "TriggerManager | None" = None,
     ):
         """
         Initialize the GCode server.
@@ -46,13 +41,14 @@ class GCodeServer:
             address: The address to bind the server to.
             port: The port to listen on.
             response_timeout: Timeout in seconds for waiting for device response.
-            trigger_manager: Optional TriggerManager for matching triggers.
+
+        Note:
+            TriggerManager is accessed via singleton from the server methods.
         """
         self.device = device
         self.address = address
         self.port = port
         self.response_timeout = response_timeout
-        self.trigger_manager = trigger_manager
 
         self._server: asyncio.Server | None = None
         self._running = False
@@ -282,10 +278,11 @@ class GCodeServer:
                 pass
             return
 
-        # Check for triggers if trigger manager is available
+        # Check for triggers using the singleton trigger manager
         tasks_to_queue: list[Task] | None = None
-        if self.trigger_manager:
-            tasks_to_queue = self.trigger_manager.build_tasks_for_gcode(
+        trigger_manager = TriggerManager.get_instance()
+        if trigger_manager and trigger_manager.triggers:
+            tasks_to_queue = trigger_manager.build_tasks_for_gcode(
                 command,
                 client_uuid,
             )
@@ -298,6 +295,12 @@ class GCodeServer:
                 should_respond=True,
             )
             tasks_to_queue = [task]
+
+        logger.debug(
+            f"Built {len(tasks_to_queue)} tasks for command from {client_address}: "
+            f"{command}"
+        )
+        logger.debug(f"Tasks: {repr(tasks_to_queue)}")
 
         # Queue all tasks for processing
         for task in tasks_to_queue:

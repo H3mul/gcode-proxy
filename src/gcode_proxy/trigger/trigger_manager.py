@@ -5,6 +5,7 @@ and builds appropriate Task objects for the device to execute.
 """
 
 from collections.abc import Sequence
+import threading
 
 from gcode_proxy.core.logging import get_logger
 from .trigger import Trigger
@@ -27,33 +28,92 @@ class TriggerManager:
 
     If no triggers match, returns None to indicate the server should
     create a simple GCodeTask for the command.
+
+    This class is implemented as a thread-safe singleton to ensure a single
+    instance is shared across the application.
     """
 
-    def __init__(self, trigger_configs: Sequence[CustomTriggerConfig] | None = None):
+    _instance: "TriggerManager | None" = None
+    _lock = threading.Lock()
+    triggers: list[Trigger] = []
+
+    def __new__(cls) -> "TriggerManager":
         """
-        Initialize the trigger manager with a list of trigger configurations.
+        Create or return the singleton instance.
+
+        Returns:
+            The singleton TriggerManager instance.
+        """
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    instance = super().__new__(cls)
+                    cls._instance = instance
+
+        return cls._instance
+
+    def __init__(self) -> None:
+        """
+        Initialize the TriggerManager singleton.
+
+        This method is idempotent - it only initializes the triggers list
+        if it hasn't been initialized yet. Subsequent calls do nothing.
+        """
+        # Triggers are initialized in __new__, so nothing to do here
+        pass
+
+    def load_from_config(
+        self, trigger_configs: Sequence[CustomTriggerConfig]
+    ) -> None:
+        """
+        Load triggers from CustomTriggerConfig instances.
+
+        This method populates the singleton's trigger list from the given
+        configuration. Should be called once during application startup.
 
         Args:
             trigger_configs: Sequence of CustomTriggerConfig instances.
-                           If None, initializes with an empty list.
 
         Raises:
             ValueError: If any trigger configuration is invalid.
         """
-        self.triggers: list[Trigger] = []
+        self.triggers.clear()
 
-        if trigger_configs:
-            for config in trigger_configs:
-                try:
-                    trigger = Trigger(config)
-                    self.triggers.append(trigger)
-                    logger.info(
-                        f"Loaded trigger '{config.id}': {config.trigger.match} "
-                        f"-> {config.command}"
-                    )
-                except ValueError as e:
-                    logger.error(f"Failed to load trigger: {e}")
-                    raise
+        for config in trigger_configs:
+            try:
+                trigger = Trigger(config)
+                self.triggers.append(trigger)
+                logger.info(
+                    f"Loaded trigger '{config.id}': {config.trigger.match} "
+                    f"-> {config.command}"
+                )
+            except ValueError as e:
+                logger.error(f"Failed to load trigger: {e}")
+                raise
+
+    @classmethod
+    def get_instance(cls) -> "TriggerManager":
+        """
+        Get the singleton instance without initializing triggers.
+
+        Returns:
+            The singleton TriggerManager instance.
+        """
+        if cls._instance is None:
+            return cls()
+        return cls._instance
+
+    @classmethod
+    def reset(cls) -> None:
+        """
+        Reset the singleton instance (useful for testing).
+
+        This clears the singleton so a new instance can be created.
+        """
+        with cls._lock:
+            if cls._instance is not None:
+                cls._instance.triggers.clear()
+            cls._instance = None
 
     def find_matching_triggers(self, gcode: str) -> list[Trigger]:
         """
@@ -104,7 +164,6 @@ class TriggerManager:
                 sync_task = GCodeTask(
                     client_uuid=None,  # Internal sync command, don't respond to client
                     gcode="G4 P0\n",
-                    immediate=False,
                     should_respond=False,
                 )
                 tasks.append(sync_task)
@@ -114,7 +173,6 @@ class TriggerManager:
                 client_uuid=client_uuid,
                 id=trigger.id,
                 command=trigger.command,
-                immediate=False,
                 should_respond=True,
             )
             tasks.append(shell_task)

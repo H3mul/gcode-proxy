@@ -10,7 +10,7 @@ from gcode_proxy.core.logging import setup_logging, get_logger
 from gcode_proxy.device import GCodeDevice, GrblDevice
 from gcode_proxy.core.server import GCodeServer
 # from gcode_proxy.core.task import TaskQueue, create_task_queue
-from gcode_proxy.trigger import TriggerManager
+
 from gcode_proxy.core.connection_manager import ConnectionManager
 
 
@@ -31,7 +31,6 @@ class GCodeProxyService:
         device: GCodeDevice,
         address: str = "0.0.0.0",
         port: int = 8080,
-        trigger_manager: TriggerManager | None = None,
     ):
         """
         Initialize the proxy service with an existing device.
@@ -40,18 +39,19 @@ class GCodeProxyService:
             device: The GCodeDevice instance to use for communication.
             address: Address to bind the server to.
             port: Port to listen on.
-            trigger_manager: Optional TriggerManager for handling GCode triggers.
+
+        Note:
+            TriggerManager is accessed via singleton. Initialize it separately
+            before creating the service if needed.
         """
         self.device = device
-        self.trigger_manager = trigger_manager
         self.connection_manager = ConnectionManager()
 
-        # Create the server with the device
+        # Create the server with the device (trigger_manager accessed via singleton)
         self.server = GCodeServer(
             device=self.device,
             address=address,
             port=port,
-            trigger_manager=trigger_manager,
         )
 
     @classmethod

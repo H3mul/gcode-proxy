@@ -309,11 +309,11 @@ def main(
     if config.custom_triggers:
         logger.info(f"  Custom triggers: {len(config.custom_triggers)} configured")
 
-    # Create trigger manager if triggers are configured
-    trigger_manager = None
+    # Initialize trigger manager singleton if triggers are configured
     if config.custom_triggers:
         try:
-            trigger_manager = TriggerManager(config.custom_triggers)
+            trigger_manager = TriggerManager.get_instance()
+            trigger_manager.load_from_config(config.custom_triggers)
         except ValueError as e:
             logger.error(f"Failed to load triggers: {e}")
             sys.exit(1)
@@ -342,7 +342,6 @@ def main(
             swallow_realtime_ok=config.device.swallow_realtime_ok,
             status_behavior=config.device.status_behavior,
         )
-        service.trigger_manager = trigger_manager
 
     # Set up signal handlers for graceful shutdown
     class ExitSignal(Exception):  # noqa: N818
