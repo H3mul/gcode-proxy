@@ -127,7 +127,6 @@ custom-triggers:
     trigger:
       type: gcode
       match: M8
-      synchronize: true
     command: "hass-cli service call homeassistant.turn_on --arguments entity_id=switch.laser_air_assist"
 
   # Example: Air assist off (M9 command)
@@ -135,7 +134,6 @@ custom-triggers:
     trigger:
       type: gcode
       match: M9
-      synchronize: true
     command: "hass-cli service call homeassistant.turn_off --arguments entity_id=switch.laser_air_assist"
 
   # Example: Air vent on (M7 command)
@@ -143,7 +141,6 @@ custom-triggers:
     trigger:
       type: gcode
       match: M7$
-      synchronize: true
     command: "hass-cli service call homeassistant.turn_on --arguments entity_id=fan.laser_vent"
 
   # Example: Air vent off (M7.1 or M9 command)
@@ -151,5 +148,4 @@ custom-triggers:
     trigger:
       type: gcode
       match: M7\.1
-      synchronize: true
     command: "hass-cli service call homeassistant.turn_off --arguments entity_id=fan.laser_vent"

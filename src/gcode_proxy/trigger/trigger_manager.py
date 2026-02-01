@@ -159,16 +159,6 @@ class TriggerManager:
 
         # Process each matching trigger
         for trigger in matching_triggers:
-            # If trigger requires synchronization, prepend a G4 P0 command
-            # if trigger.synchronize:
-            #     sync_task = GCodeTask(
-            #         client_uuid=None,  # Internal sync command, don't respond to client
-            #         gcode="G4 P0\n",
-            #         should_respond=False,
-            #         buffer_pause=True
-            #     )
-            #     tasks.append(sync_task)
-
             # Create a ShellTask for the trigger command
             shell_task = ShellTask(
                 client_uuid=client_uuid,

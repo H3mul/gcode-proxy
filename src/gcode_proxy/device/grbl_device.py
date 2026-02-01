@@ -740,7 +740,7 @@ class GrblDevice(GCodeDevice):
 
         # Pop the oldest in-flight task
         completed_task = self._in_flight_queue.pop(0)
-        logger.debug(f"Completed task: {repr(completed_task)}")
+        logger.verbose(f"Completed task: {repr(completed_task)}")
 
         # Credit back the buffer quota if it's a GCodeTask
         if isinstance(completed_task, GCodeTask):
@@ -795,7 +795,7 @@ class GrblDevice(GCodeDevice):
                     if shell_task.should_respond:
                         shell_task.send_response(response)
 
-                    logger.debug(f"Completed task: {repr(shell_task)}")
+                    logger.verbose(f"Completed task: {repr(shell_task)}")
 
     def _should_swallow_ok(self) -> bool:
         """

@@ -48,7 +48,7 @@ class GCodeTriggerConfig:
 
     type: str
     match: str
-    synchronize: bool = False
+    synchronize: bool = True
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GCodeTriggerConfig":
