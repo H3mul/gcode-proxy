@@ -56,9 +56,9 @@ device:
   # Period in ms for pinging device with `?` command
   # The `?` command requests a status report from the device, allowing the proxy
   # to track device state (machine position, work position, buffer status, etc.).
-  # Default: 200ms (5Hz as recommended in GRBL specification)
+  # Default: 1000ms (1Hz). Set to 0 to disable liveness probing.
   # Environment variable: DEVICE_LIVENESS_PERIOD
-  liveness-period: 200 #ms
+  liveness-period: 1000 #ms
 
   # Suppress 'ok' responses from `?` commands
   # Some GRBL devices respond with 'ok' to the `?` status request command, which is
@@ -69,6 +69,24 @@ device:
   # Environment variable: DEVICE_SWALLOW_REALTIME_OK
   swallow-realtime-ok: true
 
+  # Status query behavior mode
+  # Determines how the proxy handles status queries (?) from clients
+  #
+  # Modes:
+  #   liveness-cache:
+  #     - Proxy maintains internal status cache from periodic device probes (at `liveness-period` intervals)
+  #     - Client status queries are served immediately from cache
+  #     - Faster response times, predictable status update intervals
+  #     - Good for high-throughput scenarios
+  #
+  #   forward (default):
+  #     - Client status queries are forwarded directly to the device
+  #     - Always provides fresh, real-time device state
+  #     - Slightly higher latency due to device communication
+  #     - Good for accuracy-critical or low-throughput scenarios
+  #
+  # Environment variable: DEVICE_STATUS_BEHAVIOR
+  status-behavior: forward
 
 
 # GCode communication log file

@@ -24,6 +24,7 @@ from gcode_proxy.core.config import (
     ENV_DEVICE_LIVENESS_PERIOD,
     ENV_DEVICE_RESPONSE_TIMEOUT,
     ENV_DEVICE_SERIAL_DELAY,
+    ENV_DEVICE_STATUS_BEHAVIOR,
     ENV_DEVICE_SWALLOW_REALTIME_OK,
     ENV_DEVICE_USB_ID,
     ENV_GCODE_LOG_FILE,
@@ -122,6 +123,15 @@ from gcode_proxy.trigger import TriggerManager
     ),
 )
 @click.option(
+    "--status-behavior",
+    type=str,
+    default=None,
+    help=(
+        f"Status query behavior: 'liveness-cache' or 'forward'. "
+        f"[env: {ENV_DEVICE_STATUS_BEHAVIOR}]"
+    ),
+)
+@click.option(
     "--gcode-log-file",
     type=click.Path(path_type=Path),
     default=None,
@@ -170,6 +180,7 @@ def main(
     response_timeout: float | None,
     liveness_period: float | None,
     swallow_realtime_ok: bool | None,
+    status_behavior: str | None,
     gcode_log_file: Path | None,
     tcp_log_file: Path | None,
     dry_run: bool,
@@ -238,6 +249,9 @@ def main(
 
     if swallow_realtime_ok is not None:
         cli_args["swallow_realtime_ok"] = swallow_realtime_ok
+
+    if status_behavior is not None:
+        cli_args["status_behavior"] = status_behavior
 
     if gcode_log_file is not None:
         cli_args["gcode_log_file"] = str(gcode_log_file)
@@ -326,6 +340,7 @@ def main(
             queue_limit=config.server.queue_limit,
             liveness_period=config.device.liveness_period,
             swallow_realtime_ok=config.device.swallow_realtime_ok,
+            status_behavior=config.device.status_behavior,
         )
         service.trigger_manager = trigger_manager
 

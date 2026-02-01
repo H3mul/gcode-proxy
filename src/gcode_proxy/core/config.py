@@ -30,6 +30,7 @@ ENV_DEVICE_SERIAL_DELAY = "DEVICE_SERIAL_DELAY"
 ENV_DEVICE_RESPONSE_TIMEOUT = "DEVICE_RESPONSE_TIMEOUT"
 ENV_DEVICE_LIVENESS_PERIOD = "DEVICE_LIVENESS_PERIOD"
 ENV_DEVICE_SWALLOW_REALTIME_OK = "DEVICE_SWALLOW_REALTIME_OK"
+ENV_DEVICE_STATUS_BEHAVIOR = "DEVICE_STATUS_BEHAVIOR"
 ENV_GCODE_LOG_FILE = "GCODE_LOG_FILE"
 ENV_TCP_LOG_FILE = "TCP_LOG_FILE"
 ENV_CONFIG_FILE = "GCODE_PROXY_CONFIG"
@@ -53,8 +54,9 @@ class DeviceConfig:
     baud_rate: int = 115200
     serial_delay: float = 100 #ms
     response_timeout: float = 30000.0 #ms
-    liveness_period: float = 200.0 #ms
+    liveness_period: float = 1000.0 #ms
     swallow_realtime_ok: bool = True
+    status_behavior: str = "forward"  # StatusBehavior enum value as string
     gcode_log_file: str | None = None
     tcp_log_file: str | None = None
 
@@ -182,6 +184,10 @@ class Config:
                 config.device.swallow_realtime_ok = bool(device_data["swallow-realtime-ok"])
             elif "swallow_realtime_ok" in device_data:
                 config.device.swallow_realtime_ok = bool(device_data["swallow_realtime_ok"])
+            if "status-behavior" in device_data:
+                config.device.status_behavior = str(device_data["status-behavior"])
+            elif "status_behavior" in device_data:
+                config.device.status_behavior = str(device_data["status_behavior"])
 
         # Parse gcode-log-file at root level
         if "gcode-log-file" in data:
@@ -249,6 +255,9 @@ class Config:
         if cli_args.get("swallow_realtime_ok") is not None:
             config.device.swallow_realtime_ok = bool(cli_args["swallow_realtime_ok"])
 
+        if cli_args.get("status_behavior") is not None:
+            config.device.status_behavior = str(cli_args["status_behavior"])
+
         if cli_args.get("gcode_log_file") is not None:
             config.gcode_log_file = str(cli_args["gcode_log_file"])
 
@@ -298,6 +307,9 @@ class Config:
             value = os.environ[ENV_DEVICE_SWALLOW_REALTIME_OK].lower()
             config.device.swallow_realtime_ok = value in ("true", "1", "yes")
 
+        if ENV_DEVICE_STATUS_BEHAVIOR in os.environ:
+            config.device.status_behavior = os.environ[ENV_DEVICE_STATUS_BEHAVIOR]
+
         if ENV_GCODE_LOG_FILE in os.environ:
             config.gcode_log_file = os.environ[ENV_GCODE_LOG_FILE]
 
@@ -346,6 +358,7 @@ class Config:
                 "serial_delay": self.device.serial_delay,
                 "liveness_period": self.device.liveness_period,
                 "swallow_realtime_ok": self.device.swallow_realtime_ok,
+                "status_behavior": self.device.status_behavior,
             },
         }
         if self.gcode_log_file is not None:
@@ -382,6 +395,7 @@ class Config:
             "response-timeout": self.device.response_timeout,
             "liveness-period": self.device.liveness_period,
             "swallow-realtime-ok": self.device.swallow_realtime_ok,
+            "status-behavior": self.device.status_behavior,
         }
 
         # Only include usb-id if it's set

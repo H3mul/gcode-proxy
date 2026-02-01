@@ -7,6 +7,7 @@ counting protocol to manage device buffer quota and handles real-time commands.
 """
 
 import asyncio
+from enum import Enum
 
 import serial_asyncio
 
@@ -25,8 +26,27 @@ logger = get_logger()
 
 MAX_RESPONSE_QUEUE_SIZE = 1000 #serial input lines
 DEFAULT_GRBL_BUFFER_SIZE = 128 #bytes
-DEFAULT_LIVENESS_PERIOD = 200 #ms (5Hz as recommended in GRBL spec)
+DEFAULT_LIVENESS_PERIOD = 1000 #ms
 CONFIRMATION_DELIVERY_GRACE_PERIOD = 200 #ms
+
+
+class StatusBehavior(Enum):
+    """Enumeration for status query behavior modes."""
+
+    LIVENESS_CACHE = "liveness-cache"
+    """
+    Cache status from internal probes.
+    Proxy periodically sends ? to device and caches responses.
+    Client queries are served from cache.
+    """
+
+    FORWARD = "forward"
+    """
+    Forward status queries directly to device.
+    Each client ? is sent to device, response returned to client.
+    Always provides fresh device state.
+    """
+
 
 class GrblDevice(GCodeDevice):
     """
@@ -50,6 +70,7 @@ class GrblDevice(GCodeDevice):
         liveness_period: float = DEFAULT_LIVENESS_PERIOD, #ms
         swallow_realtime_ok: bool = True,
         device_discovery_poll_interval: float = 1000, #ms
+        status_behavior: StatusBehavior | str = StatusBehavior.FORWARD,
     ):
         """
         Initialize the GRBL serial device.
@@ -62,12 +83,17 @@ class GrblDevice(GCodeDevice):
             read_buffer_size: Size of the read buffer for serial communication.
             initialization_delay: Delay in ms to allow device initialization after connection.
             grbl_buffer_size: Maximum characters allowed in device buffer (default: 128).
-            liveness_period: Period in ms for pinging device with `?` command (default: 200ms).
+            liveness_period: Period in ms for pinging device with `?` command (default: 1000ms).
+                Set to 0 to disable liveness probing.
             swallow_realtime_ok: Suppress 'ok' responses from `?` commands (default: True).
             device_discovery_timeout: Maximum time to wait for device to appear.
                 None means wait forever (default: None).
             device_discovery_poll_interval: Time between device discovery polls
                 (default: 1000 ms).
+            status_behavior: How to handle status queries (StatusBehavior enum or str).
+                StatusBehavior.LIVENESS_CACHE: Cache status from internal probes.
+                StatusBehavior.FORWARD: Forward queries directly to device.
+                (default: StatusBehavior.FORWARD)
 
         Raises:
             ValueError: If neither usb_id nor dev_path are provided
@@ -87,6 +113,11 @@ class GrblDevice(GCodeDevice):
         self.grbl_buffer_size = grbl_buffer_size
         self.liveness_period = liveness_period / 1000
         self.swallow_realtime_ok = swallow_realtime_ok
+        # Convert string to enum if needed
+        if isinstance(status_behavior, str):
+            self.status_behavior = StatusBehavior(status_behavior)
+        else:
+            self.status_behavior = status_behavior
         self.device_discovery_poll_interval = device_discovery_poll_interval / 1000
 
         self._protocol: GCodeSerialProtocol | None = None
@@ -402,7 +433,14 @@ class GrblDevice(GCodeDevice):
         Sends a `?` command every liveness_period ms to request
         a status report from the device. This helps maintain the device state
         and ensures the connection is still active.
+
+        If liveness_period is 0, this task is disabled and returns immediately.
         """
+        # Check if liveness probing is disabled
+        if self.liveness_period == 0:
+            logger.info("Device liveness task disabled (liveness_period is 0)")
+            return
+
         logger.info(f"Device liveness task started (period: {self.liveness_period * 1000}ms)")
 
         try:
@@ -493,6 +531,8 @@ class GrblDevice(GCodeDevice):
             await self._initialize_device()
 
         elif line.startswith("<"):
+            if self.status_behavior == StatusBehavior.FORWARD:
+                await self._respond_to_client(line)
             await self._handle_state_update(line)
 
         elif line.startswith("["):
@@ -557,14 +597,22 @@ class GrblDevice(GCodeDevice):
 
         # Handle status query (?)
         elif gcode == "?":
-            # Skip sending the command, as we handle liveness pings ourselves
-            logger.verbose("Real-time command: Status query (?) - serving cached state")
-            if self._device_state and self._device_state.status_line:
-                # Send the cached status report to the client
-                status_report = self._device_state.status_line
-                if task.should_respond:
-                    task.send_response(status_report)
-                    logger.debug(f"Sent cached status report to client: {status_report}")
+            logger.verbose("Real-time command: Status query (?)")
+            
+            if self.status_behavior == StatusBehavior.FORWARD:
+                # Forward mode: send query to device and track as in-flight
+                logger.verbose("Status query forwarded to device (forward mode)")
+                # Push as oldest in-flight command to be responded to next
+                self._in_flight_queue.insert(0, task)
+                await self._send(gcode + "\n")
+            else:
+                # liveness-cache mode: serve from cached state
+                if self._device_state and self._device_state.status_line:
+                    # Send the cached status report to the client
+                    status_report = self._device_state.status_line
+                    if task.should_respond:
+                        task.send_response(status_report + "\nok\n")
+                        logger.verbose(f"Sent cached status report to client: {status_report}")
             return True
 
         # Handle feed hold (!)
@@ -637,7 +685,9 @@ class GrblDevice(GCodeDevice):
                         and self._device_state
                         and self._device_state.homing == HomingStatus.COMPLETE
                     ):
-                        logger.info("Homing 'ok' must have been lost, completing homing task based on Idle")
+                        logger.info(
+                            "Homing 'ok' lost, completing homing task based on Idle"
+                        )
                         await self._handle_task_completion("ok", success=True)
 
                 asyncio.create_task(complete_homing_task())
@@ -675,7 +725,9 @@ class GrblDevice(GCodeDevice):
 
             # Make sure we finish homing tracking in case we got an ok before state change
             if self._is_homing(completed_task) and self._device_state:
-                logger.debug(f"Completing homing tracking: ok received (task: {repr(completed_task)})")
+                logger.debug(
+                    f"Completing homing tracking: ok received (task: {repr(completed_task)})"
+                )
                 self._device_state.homing = HomingStatus.OFF
 
         # Send response to the completed task's client

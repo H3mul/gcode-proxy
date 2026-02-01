@@ -62,11 +62,12 @@ class GCodeProxyService:
         baud_rate: int = 115200,
         address: str = "0.0.0.0",
         port: int = 8080,
-        serial_delay: float = 0.1,
+        serial_delay: float = 100.0,
         gcode_log_file: str | None = None,
-        queue_limit: int = 1000,
-        liveness_period: float = 200, #ms
+        queue_limit: int = 50,
+        liveness_period: float = 1000.0,
         swallow_realtime_ok: bool = True,
+        status_behavior: str = "forward",
     ) -> "GCodeProxyService":
         """
         Create a proxy service with a serial GRBL device.
@@ -75,8 +76,8 @@ class GCodeProxyService:
         with a GrblDevice for actual hardware communication.
 
         Args:
-            usb_id: USB device ID in vendor:product format (mutually exclusive with dev_path).
-            dev_path: Device path like /dev/ttyACM0 (mutually exclusive with usb_id).
+            usb_id: USB device ID in vendor:product format.
+            dev_path: Device path like /dev/ttyACM0.
             baud_rate: Serial baud rate for the device.
             address: Address to bind the server to.
             port: Port to listen on.
@@ -85,6 +86,7 @@ class GCodeProxyService:
             queue_limit: Maximum size of the command queue (default: 50).
             liveness_period: Period in ms for pinging device with `?` command.
             swallow_realtime_ok: Suppress 'ok' responses from `?` commands.
+            status_behavior: Status query behavior ('liveness-cache' or 'forward').
 
         Returns:
             A configured GCodeProxyService instance.
@@ -101,6 +103,7 @@ class GCodeProxyService:
             initialization_delay=serial_delay,
             liveness_period=liveness_period,
             swallow_realtime_ok=swallow_realtime_ok,
+            status_behavior=status_behavior,
         )
         return cls(
             device=device,
