@@ -296,12 +296,6 @@ class GCodeServer:
             )
             tasks_to_queue = [task]
 
-        logger.debug(
-            f"Built {len(tasks_to_queue)} tasks for command from {client_address}: "
-            f"{command}"
-        )
-        logger.debug(f"Tasks: {repr(tasks_to_queue)}")
-
         # Queue all tasks for processing
         for task in tasks_to_queue:
             await self.device.do_task(task)

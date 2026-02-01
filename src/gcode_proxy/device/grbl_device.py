@@ -396,6 +396,9 @@ class GrblDevice(GCodeDevice):
                 # Mark as done in the queue
                 self.task_queue.task_done()
 
+                # Drain any non-GCodeTasks so that we only wait for gcode task completion
+                await self._drain_non_gcode_tasks()
+
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -598,7 +601,7 @@ class GrblDevice(GCodeDevice):
         # Handle status query (?)
         elif gcode == "?":
             logger.verbose("Real-time command: Status query (?)")
-            
+
             if self.status_behavior == StatusBehavior.FORWARD:
                 # Forward mode: send query to device and track as in-flight
                 logger.verbose("Status query forwarded to device (forward mode)")
@@ -735,11 +738,24 @@ class GrblDevice(GCodeDevice):
             completed_task.send_response(response_line)
 
         # Drain any non-GCodeTasks following this task and execute them
+        await self._drain_non_gcode_tasks()
+
+        # Try to fill buffer with more tasks
+        await self._fill_device_buffer()
+
+    async def _drain_non_gcode_tasks(self) -> None:
+        """
+        Drain and execute all non-GCodeTasks from the in-flight queue.
+
+        This is used during device reinitialization to ensure that any
+        pending shell tasks are executed after the device resets.
+        """
+
         while self._in_flight_queue and not isinstance(self._in_flight_queue[0], GCodeTask):
             shell_task = self._in_flight_queue.pop(0)
 
             if isinstance(shell_task, ShellTask):
-                logger.debug(f"Executing shell task: {shell_task.id}")
+                logger.debug(f"Executing shell task during drain: {shell_task.id}")
                 response = ""
                 try:
                     success_val, error_msg = await shell_task.execute()
@@ -751,8 +767,7 @@ class GrblDevice(GCodeDevice):
                     if shell_task.should_respond:
                         shell_task.send_response(response)
 
-        # Try to fill buffer with more tasks
-        await self._fill_device_buffer()
+                    logger.debug(f"Completed task: {repr(shell_task)}")
 
     def _should_swallow_ok(self) -> bool:
         """
