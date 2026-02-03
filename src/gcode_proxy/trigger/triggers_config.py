@@ -68,7 +68,7 @@ class GCodeTriggerConfig:
 
         trigger_type = data.get("type", "").strip()
         match_pattern = data.get("match", "").strip()
-        synchronize = data.get("synchronize", False)
+        synchronize = data.get("synchronize", True)
 
         if not trigger_type:
             raise ValueError("Trigger 'type' is required")

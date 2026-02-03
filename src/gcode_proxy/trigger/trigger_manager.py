@@ -10,7 +10,7 @@ import threading
 from gcode_proxy.core.logging import get_logger
 from .trigger import Trigger
 from .triggers_config import CustomTriggerConfig
-from gcode_proxy.core.task import Task, GCodeTask, ShellTask
+from gcode_proxy.core.task import Task, ShellTask
 
 logger = get_logger()
 
@@ -84,8 +84,8 @@ class TriggerManager:
                 trigger = Trigger(config)
                 self.triggers.append(trigger)
                 logger.info(
-                    f"Loaded trigger '{config.id}': {config.trigger.match} "
-                    f"-> {config.command}"
+                    "Loaded trigger '%s': /%s/ (sync: %s)",
+                    config.id, config.trigger.match, config.trigger.synchronize
                 )
             except ValueError as e:
                 logger.error(f"Failed to load trigger: {e}")
