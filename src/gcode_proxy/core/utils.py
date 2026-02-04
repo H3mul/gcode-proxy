@@ -127,7 +127,7 @@ GRBL_CONTENT_RE = re.compile(
 )
 GRBL_TERMINATORS_RE = re.compile(r"ok|error:\d+|!!|grbl\s\d+\.\d+.*", re.IGNORECASE)
 GRBL_SOFT_RESET_RE = re.compile(r"\x18", re.IGNORECASE)
-GRBL_IMMEDIATE_COMMANDS_RE = re.compile(r"M0|M1|M2|M30|!|~|\x18", re.IGNORECASE)
+GRBL_IMMEDIATE_COMMANDS_RE = re.compile(r"\?|M0|M1|M2|M30|!|~|\x18", re.IGNORECASE)
 
 
 def clean_grbl_response(raw_line: str) -> str:

@@ -10,7 +10,6 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from enum import Enum, auto
-import traceback
 
 from gcode_proxy.core.logging import get_logger, log_tcp_sent
 

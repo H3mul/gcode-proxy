@@ -16,6 +16,7 @@ from gcode_proxy.core.logging import get_logger
 from gcode_proxy.core.task import GCodeTask, ShellTask, Task
 from gcode_proxy.core.utils import (
     SerialConnectionError,
+    is_immediate_grbl_command,
     wait_for_device,
 )
 from gcode_proxy.device.device import GCodeDevice
@@ -368,19 +369,23 @@ class GrblDevice(GCodeDevice):
 
                 # Check if this is a GCodeTask and if it fits in the buffer
                 if self.task_queue._queue[0].char_count > self._buffer_quota:  # pyright: ignore[reportAttributeAccessIssue]
+                    logger.debug(
+                        f"Buffer too full for next task: {repr(self.task_queue._queue[0])}" # pyright: ignore[reportAttributeAccessIssue]
+                        f"({self._buffer_quota * 100.0 / self.grbl_buffer_size}%)"
+                    )
                     break
                 # Get the next task from the queue
                 task = await self.task_queue.get()
 
                 if isinstance(task, GCodeTask):
                     # Send the GCode to the device
-                    await self._send(task.gcode)
+                    await self._send(task)
 
-                    logger.debug(f"Sent GCode task: {task.gcode.strip()!r}, ")
+                    logger.verbose(f"Sent GCode task: {task.gcode.strip()!r}, ")
 
                     # Track homing operations specially
                     if self._is_homing(task) and self._device_state:
-                        logger.debug(
+                        logger.verbose(
                             "Starting homing tracking, waiting for status to return"
                             + f" to Idle from Home; task: {repr(task)}"
                         )
@@ -392,19 +397,13 @@ class GrblDevice(GCodeDevice):
                         f"{task.id}"
                     )
                     self.buffer_paused = True
-                    dwell_task = GCodeTask(gcode="G4 P0\n")
+                    dwell_task = GCodeTask(gcode="G4 P0\n", should_respond=False)
                     self._in_flight_queue.append(dwell_task)
-                    await self._send(dwell_task.gcode)
+                    await self._send(dwell_task)
 
-                # Deduct from quota and add to in-flight
-                self._buffer_quota -= task.char_count
                 self._in_flight_queue.append(task)
 
                 logger.verbose(f"Added task to in-flight queue: {repr(task)}")
-                logger.debug(
-                    f"Buffer quota remaining: {self._buffer_quota} "
-                    f"({self._buffer_quota * 100.0 / self.grbl_buffer_size}%)"
-                )
 
                 # Mark as done in the queue
                 self.task_queue.task_done()
@@ -468,7 +467,7 @@ class GrblDevice(GCodeDevice):
 
                     # Send the status request command
                     if self._protocol:
-                        await self._send("?\n")
+                        await self._send(GCodeTask(gcode="?", should_respond=False))
                         # Increment counter for skippable ok if configured
                         if self.swallow_realtime_ok:
                             self._skippable_oks += 1
@@ -621,7 +620,7 @@ class GrblDevice(GCodeDevice):
                 logger.verbose("Status query forwarded to device (forward mode)")
                 # Push as oldest in-flight command to be responded to next
                 self._in_flight_queue.insert(0, task)
-                await self._send(gcode + "\n")
+                await self._send(GCodeTask(gcode=gcode))
             else:
                 # liveness-cache mode: serve from cached state
                 if self._device_state and self._device_state.status_line:
@@ -655,7 +654,7 @@ class GrblDevice(GCodeDevice):
         else:
             return False
 
-        await self._send(gcode + "\n")
+        await self._send(GCodeTask(gcode=gcode))
         return True
 
     async def _handle_state_update(self, line: str) -> None:
@@ -677,7 +676,7 @@ class GrblDevice(GCodeDevice):
 
         # Handle state changes
         if self._device_state.status != old_status:
-            logger.debug(f"Updated device from {old_status} to {self._device_state.status}")
+            logger.debug(f"Device changed state from {old_status} to {self._device_state.status}")
 
             # Redundancy check for ALARM state to reinitialize (in case we missed ALARM: message)
             if self.device_state == GrblDeviceStatus.ALARM.value:
@@ -690,7 +689,7 @@ class GrblDevice(GCodeDevice):
                 and old_status == GrblDeviceStatus.HOME.value
                 and self._device_state.status == GrblDeviceStatus.IDLE.value
             ):
-                logger.debug("Detected homing task end via state update")
+                logger.verbose("Detected homing task end via state update")
                 self._device_state.homing = HomingStatus.COMPLETE
 
                 # Allow some time for the ok to arrive,
@@ -732,11 +731,15 @@ class GrblDevice(GCodeDevice):
 
         # Credit back the buffer quota if it's a GCodeTask
         if isinstance(completed_task, GCodeTask):
-            self._buffer_quota += completed_task.char_count
-            logger.verbose(
-                f"Credited {completed_task.char_count} chars, "
-                f"buffer quota now: {self._buffer_quota}"
-            )
+
+            if not is_immediate_grbl_command(completed_task.gcode):
+                self._buffer_quota += completed_task.char_count
+                logger.verbose(
+                    f"Credited {completed_task.char_count} chars,"
+                    f"for task {repr(completed_task.gcode)} "
+                    f"buffer quota now: {self._buffer_quota} "
+                    f"({self._buffer_quota * 100.0 / self.grbl_buffer_size}%)"
+                )
 
             # Make sure we finish homing tracking in case we got an ok before state change
             if self._is_homing(completed_task) and self._device_state:
@@ -871,7 +874,7 @@ class GrblDevice(GCodeDevice):
 
         ConnectionManager().broadcast(line)
 
-    async def _send(self, gcode: str) -> None:
+    async def _send(self, task: GCodeTask) -> None:
         """
         Send a GCode command to the serial device.
 
@@ -885,4 +888,12 @@ class GrblDevice(GCodeDevice):
             msg = "Serial protocol is not available"
             raise SerialConnectionError(msg)
 
-        self._protocol.write(gcode)
+        self._protocol.write(task.gcode)
+
+        if not is_immediate_grbl_command(task.gcode):
+            # Deduct from quota and add to in-flight
+            self._buffer_quota -= task.char_count
+            logger.debug(
+                f"Buffer quota deducted after sending task: {self._buffer_quota}"
+                f"({self._buffer_quota * 100.0 / self.grbl_buffer_size}%), task: {repr(task.gcode)}"
+            )
