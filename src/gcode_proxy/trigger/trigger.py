@@ -43,6 +43,7 @@ class Trigger:
         self.config = config
         self.id = config.id
         self.command = config.command
+        self.behavior = config.trigger.behavior
         self.synchronize = config.trigger.synchronize
         self.state_restriction = config.trigger.state  # Optional state restriction
 

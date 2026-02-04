@@ -74,6 +74,7 @@ async def wait_for_device(
     usb_id: str | None = None,
     dev_path: str | None = None,
     poll_interval: float = 1.0,
+    initialization_delay: float = 0.1,
 ) -> str:
     """
     Wait for a device to become available, polling at regular intervals.
@@ -105,12 +106,14 @@ async def wait_for_device(
     while True:
         try:
             if usb_id:
+                await asyncio.sleep(initialization_delay)
                 return find_serial_port_by_usb_id(usb_id)
             else:
                 # Check if the specified device path exists
                 try:
                     with serial.Serial(dev_path) as _:
-                        return dev_path
+                        await asyncio.sleep(initialization_delay)
+                        return dev_path # pyright: ignore
                 except (serial.SerialException, FileNotFoundError):
                     pass  # Device not found yet
 

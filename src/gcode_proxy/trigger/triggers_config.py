@@ -51,6 +51,7 @@ class GCodeTriggerConfig:
     match: str
     synchronize: bool = True
     state: str | None = None  # Optional device state restriction
+    behavior: TriggerBehavior = TriggerBehavior.CAPTURE
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GCodeTriggerConfig":
@@ -71,6 +72,7 @@ class GCodeTriggerConfig:
         trigger_type = data.get("type", "").strip()
         match_pattern = data.get("match", "").strip()
         synchronize = data.get("synchronize", True)
+        behavior = data.get("behavior", TriggerBehavior.CAPTURE)
         state_restriction = data.get("state")
         if state_restriction:
             state_restriction = state_restriction.strip()
@@ -87,6 +89,7 @@ class GCodeTriggerConfig:
             type=trigger_type,
             match=match_pattern,
             synchronize=bool(synchronize),
+            behavior=TriggerBehavior.from_string(str(behavior)),
             state=state_restriction,
         )
 
@@ -187,7 +190,7 @@ class CustomTriggerConfig:
         try:
             # Determine trigger type and parse accordingly
             trigger_type = trigger_data.get("type", "").strip()
-            
+
             if trigger_type == "gcode":
                 trigger_config = GCodeTriggerConfig.from_dict(trigger_data)
             elif trigger_type == "state":

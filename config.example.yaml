@@ -154,10 +154,10 @@ custom-triggers:
   - id: job-end-notification
     trigger:
       type: gcode
-      match: M2|M30
+      match: (M2$)|(M30$)
       behavior: forward
       synchronize: false
-    command: "pb send 'Laser Job Completed' 'Laser cutting/engraving job has finished.'"
+    command: "pb push -t 'Laser Job Completed' 'Laser cutting/engraving job has finished.'"
 
   # Example: Power off when idle
   - id: idle-power-off

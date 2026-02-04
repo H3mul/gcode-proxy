@@ -11,8 +11,8 @@ import threading
 
 from gcode_proxy.core.logging import get_logger
 from .trigger import Trigger, StateTrigger
-from .triggers_config import CustomTriggerConfig, GCodeTriggerConfig, StateTriggerConfig
-from gcode_proxy.core.task import Task, ShellTask
+from .triggers_config import CustomTriggerConfig, GCodeTriggerConfig, StateTriggerConfig, TriggerBehavior
+from gcode_proxy.core.task import GCodeTask, Task, ShellTask
 from gcode_proxy.device.grbl_device_status import GrblDeviceStatus
 
 logger = get_logger()
@@ -108,8 +108,9 @@ class TriggerManager:
                     trigger = Trigger(config)
                     self.gcode_triggers.append(trigger)
                     logger.info(
-                        "Loaded GCode trigger '%s': /%s/ (sync: %s)",
-                        config.id, config.trigger.match, config.trigger.synchronize
+                        "Loaded GCode trigger '%s': /%s/ (sync: %s, behavior: %s)",
+                        config.id, config.trigger.match, config.trigger.synchronize,
+                        config.trigger.behavior
                     )
                 elif isinstance(config.trigger, StateTriggerConfig):
                     # State trigger
@@ -219,15 +220,26 @@ class TriggerManager:
 
         # Process each matching trigger
         for trigger in matching_triggers:
+            if trigger.behavior == TriggerBehavior.FORWARD:
+                tasks.append(
+                    GCodeTask(
+                        client_uuid=client_uuid,
+                        gcode=gcode,
+                        should_respond=True
+                    )
+                )
+
             # Create a ShellTask for the trigger command
-            shell_task = ShellTask(
-                client_uuid=client_uuid,
-                id=trigger.id,
-                command=trigger.command,
-                should_respond=True,
-                wait_for_idle=trigger.synchronize
+            tasks.append(
+                ShellTask(
+                    client_uuid=client_uuid,
+                    id=trigger.id,
+                    command=trigger.command,
+                    should_respond=trigger.behavior != TriggerBehavior.FORWARD,
+                    wait_for_idle=trigger.synchronize and
+                        trigger.behavior != TriggerBehavior.FORWARD,
+                )
             )
-            tasks.append(shell_task)
 
         return tasks
 

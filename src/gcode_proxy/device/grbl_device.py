@@ -180,6 +180,7 @@ class GrblDevice(GCodeDevice):
                 usb_id=self.usb_id,
                 dev_path=self.dev_path,
                 poll_interval=self.device_discovery_poll_interval,
+                initialization_delay=self.initialization_delay,
             )
         )
         self._serial_port = await self._wait_for_device_task
