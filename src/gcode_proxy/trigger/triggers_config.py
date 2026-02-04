@@ -86,14 +86,68 @@ class GCodeTriggerConfig:
 
 
 @dataclass
+class StateTriggerConfig:
+    """Configuration for state-based triggers.
+
+    This matches device state changes (e.g., Idle, Run, Hold, etc.).
+    """
+
+    type: str
+    match: str
+    delay: float = 0  # seconds
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "StateTriggerConfig":
+        """Create a StateTriggerConfig from a dictionary.
+
+        Args:
+            data: Dictionary containing 'type', 'match', and optional 'delay' keys.
+
+        Returns:
+            StateTriggerConfig instance.
+
+        Raises:
+            ValueError: If required fields are missing or invalid.
+        """
+        if not isinstance(data, dict):
+            raise ValueError("Trigger config must be a dictionary")
+
+        trigger_type = data.get("type", "").strip()
+        match_pattern = data.get("match", "").strip()
+        delay = data.get("delay", 0)
+
+        if not trigger_type:
+            raise ValueError("Trigger 'type' is required")
+        if not match_pattern:
+            raise ValueError("Trigger 'match' pattern is required")
+
+        if trigger_type != "state":
+            raise ValueError(f"Unsupported trigger type: {trigger_type}")
+
+        # Convert delay to float and validate
+        try:
+            delay_seconds = float(delay)
+            if delay_seconds < 0:
+                raise ValueError("Delay must be non-negative")
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"Invalid delay value: {e}") from e
+
+        return cls(
+            type=trigger_type,
+            match=match_pattern,
+            delay=delay_seconds,
+        )
+
+
+@dataclass
 class CustomTriggerConfig:
     """Configuration for a custom trigger.
 
-    Represents a single trigger that matches GCode and executes a command.
+    Represents a single trigger that matches GCode or device state and executes a command.
     """
 
     id: str
-    trigger: GCodeTriggerConfig
+    trigger: GCodeTriggerConfig | StateTriggerConfig
     command: str
 
     @classmethod
@@ -125,7 +179,15 @@ class CustomTriggerConfig:
             raise ValueError(f"Trigger '{trigger_id}' missing 'command'")
 
         try:
-            trigger_config = GCodeTriggerConfig.from_dict(trigger_data)
+            # Determine trigger type and parse accordingly
+            trigger_type = trigger_data.get("type", "").strip()
+            
+            if trigger_type == "gcode":
+                trigger_config = GCodeTriggerConfig.from_dict(trigger_data)
+            elif trigger_type == "state":
+                trigger_config = StateTriggerConfig.from_dict(trigger_data)
+            else:
+                raise ValueError(f"Unsupported trigger type: {trigger_type}")
         except ValueError as e:
             raise ValueError(f"Trigger '{trigger_id}' has invalid configuration: {e}") from e
 

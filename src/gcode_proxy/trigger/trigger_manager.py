@@ -1,15 +1,17 @@
-"""Trigger manager for converting GCode commands into tasks.
+"""Trigger manager for converting GCode commands into tasks and handling state changes.
 
 The trigger manager matches incoming GCode commands against configured triggers
-and builds appropriate Task objects for the device to execute.
+and builds appropriate Task objects for the device to execute. It also handles
+state-based triggers that execute in response to device state changes.
 """
 
+import asyncio
 from collections.abc import Sequence
 import threading
 
 from gcode_proxy.core.logging import get_logger
-from .trigger import Trigger
-from .triggers_config import CustomTriggerConfig
+from .trigger import Trigger, StateTrigger
+from .triggers_config import CustomTriggerConfig, GCodeTriggerConfig, StateTriggerConfig
 from gcode_proxy.core.task import Task, ShellTask
 
 logger = get_logger()
@@ -17,7 +19,7 @@ logger = get_logger()
 
 class TriggerManager:
     """
-    Manages a list of GCode triggers and converts matches into tasks.
+    Manages a list of GCode and state triggers and converts matches into tasks.
 
     When a GCode command is received, the trigger manager:
     1. Finds all triggers that match the command
@@ -25,6 +27,18 @@ class TriggerManager:
        - Optional synchronization task (G4 P0) if trigger requires it
        - ShellTask for the trigger command
     3. Returns the task list to be executed by the device
+
+    When a device state change is detected, the trigger manager:
+    1. Finds all state triggers that match the new state
+    2. Executes matching triggers asynchronously with optional delays
+    3. Maintains only one pending task per trigger ID (singular execution)
+    4. Cancels pending triggers if state changes and no longer matches
+
+    State Trigger Behavior:
+    - Each trigger ID can have at most one pending execution
+    - If a trigger is triggered while already pending, the new trigger replaces the old one
+    - If state changes during the delay and no longer matches the trigger, execution is cancelled
+    - This ensures consistent state during execution and prevents duplicate executions
 
     If no triggers match, returns None to indicate the server should
     create a simple GCodeTask for the command.
@@ -35,7 +49,10 @@ class TriggerManager:
 
     _instance: "TriggerManager | None" = None
     _lock = threading.Lock()
-    triggers: list[Trigger] = []
+    gcode_triggers: list[Trigger] = []
+    state_triggers: list[StateTrigger] = []
+    # Maps trigger ID to pending task for state triggers
+    _pending_state_triggers: dict[str, asyncio.Task] = {}
 
     def __new__(cls) -> "TriggerManager":
         """
@@ -56,8 +73,8 @@ class TriggerManager:
         """
         Initialize the TriggerManager singleton.
 
-        This method is idempotent - it only initializes the triggers list
-        if it hasn't been initialized yet. Subsequent calls do nothing.
+        This method is idempotent - it only initializes the trigger lists
+        if they haven't been initialized yet. Subsequent calls do nothing.
         """
         # Triggers are initialized in __new__, so nothing to do here
         pass
@@ -68,7 +85,7 @@ class TriggerManager:
         """
         Load triggers from CustomTriggerConfig instances.
 
-        This method populates the singleton's trigger list from the given
+        This method populates the singleton's trigger lists from the given
         configuration. Should be called once during application startup.
 
         Args:
@@ -77,16 +94,30 @@ class TriggerManager:
         Raises:
             ValueError: If any trigger configuration is invalid.
         """
-        self.triggers.clear()
+        self.gcode_triggers.clear()
+        self.state_triggers.clear()
 
         for config in trigger_configs:
             try:
-                trigger = Trigger(config)
-                self.triggers.append(trigger)
-                logger.info(
-                    "Loaded trigger '%s': /%s/ (sync: %s)",
-                    config.id, config.trigger.match, config.trigger.synchronize
-                )
+                # Determine trigger type and load accordingly
+                if isinstance(config.trigger, GCodeTriggerConfig):
+                    # GCode trigger
+                    trigger = Trigger(config)
+                    self.gcode_triggers.append(trigger)
+                    logger.info(
+                        "Loaded GCode trigger '%s': /%s/ (sync: %s)",
+                        config.id, config.trigger.match, config.trigger.synchronize
+                    )
+                elif isinstance(config.trigger, StateTriggerConfig):
+                    # State trigger
+                    trigger = StateTrigger(config)
+                    self.state_triggers.append(trigger)
+                    logger.info(
+                        "Loaded state trigger '%s': /%s/ (delay: %.1fs)",
+                        config.id, config.trigger.match, config.trigger.delay
+                    )
+                else:
+                    raise ValueError(f"Unsupported trigger type: {type(config.trigger).__name__}")
             except ValueError as e:
                 logger.error(f"Failed to load trigger: {e}")
                 raise
@@ -112,12 +143,18 @@ class TriggerManager:
         """
         with cls._lock:
             if cls._instance is not None:
-                cls._instance.triggers.clear()
+                cls._instance.gcode_triggers.clear()
+                cls._instance.state_triggers.clear()
+                # Cancel any pending state triggers
+                for task in cls._instance._pending_state_triggers.values():
+                    if not task.done():
+                        task.cancel()
+                cls._instance._pending_state_triggers.clear()
             cls._instance = None
 
-    def find_matching_triggers(self, gcode: str) -> list[Trigger]:
+    def find_matching_gcode_triggers(self, gcode: str) -> list[Trigger]:
         """
-        Find all triggers that match the given GCode.
+        Find all GCode triggers that match the given GCode.
 
         Args:
             gcode: The raw GCode command string.
@@ -125,7 +162,20 @@ class TriggerManager:
         Returns:
             List of matching Trigger instances (empty list if none match).
         """
-        matching = [trigger for trigger in self.triggers if trigger.matches(gcode)]
+        matching = [trigger for trigger in self.gcode_triggers if trigger.matches(gcode)]
+        return matching
+
+    def find_matching_state_triggers(self, state: str) -> list[StateTrigger]:
+        """
+        Find all state triggers that match the given device state.
+
+        Args:
+            state: The device state string (e.g., 'Idle', 'Run', 'Hold').
+
+        Returns:
+            List of matching StateTrigger instances (empty list if none match).
+        """
+        matching = [trigger for trigger in self.state_triggers if trigger.matches(state)]
         return matching
 
     def build_tasks_for_gcode(
@@ -150,7 +200,7 @@ class TriggerManager:
         Returns:
             List of tasks to execute, or None if no triggers match.
         """
-        matching_triggers = self.find_matching_triggers(gcode)
+        matching_triggers = self.find_matching_gcode_triggers(gcode)
 
         if not matching_triggers:
             return None
@@ -170,3 +220,141 @@ class TriggerManager:
             tasks.append(shell_task)
 
         return tasks
+
+    def _cancel_pending_trigger(self, trigger_id: str) -> None:
+        """
+        Cancel a pending state trigger by ID.
+
+        Args:
+            trigger_id: The ID of the trigger to cancel.
+        """
+        if trigger_id in self._pending_state_triggers:
+            task = self._pending_state_triggers[trigger_id]
+            if not task.done():
+                logger.debug(
+                    "Cancelling pending state trigger '%s' due to state change",
+                    trigger_id
+                )
+                task.cancel()
+            del self._pending_state_triggers[trigger_id]
+
+    async def on_device_status(self, state: str) -> None:
+        """
+        Handle a device status change by executing matching state triggers.
+
+        This method enforces two key behaviors:
+
+        1. Consistency: If a state trigger with a delay is pending and the
+           device state changes to something that doesn't match the trigger's
+           pattern, the pending execution is cancelled.
+
+        2. Singularity: Each trigger ID can have at most one pending execution.
+           If a trigger is triggered while already pending, the new trigger
+           replaces the old one.
+
+        Args:
+            state: The new device state (e.g., 'Idle', 'Run', 'Hold').
+        """
+        # First, handle consistency: cancel pending triggers that no longer match
+        self._check_consistency_for_pending_triggers(state)
+
+        # Find all triggers that match the new state
+        matching_triggers = self.find_matching_state_triggers(state)
+
+        if not matching_triggers:
+            return
+
+        # Process each matching trigger (singularity: one per trigger ID)
+        for trigger in matching_triggers:
+            # Cancel any existing pending execution for this trigger (singularity)
+            self._cancel_pending_trigger(trigger.id)
+
+            # Create a new background task for this trigger
+            task = asyncio.create_task(
+                self._execute_state_trigger(trigger, state)
+            )
+
+            # Track the pending task
+            self._pending_state_triggers[trigger.id] = task
+
+            # Clean up when task completes
+            def make_cleanup_callback(trigger_id: str):
+                def cleanup(t):
+                    self._pending_state_triggers.pop(trigger_id, None)
+                return cleanup
+
+            task.add_done_callback(make_cleanup_callback(trigger.id))
+
+    def _check_consistency_for_pending_triggers(self, state: str) -> None:
+        """
+        Check if any pending state triggers no longer match the current state.
+
+        If a pending trigger's pattern doesn't match the new state, cancel it.
+        This ensures that triggers only fire if the state remains consistent
+        throughout the delay period.
+
+        Args:
+            state: The new device state.
+        """
+        # Find triggers that are no longer consistent with the new state
+        triggers_to_cancel = []
+
+        for trigger_id in list(self._pending_state_triggers.keys()):
+            # Find the trigger definition
+            trigger = None
+            for t in self.state_triggers:
+                if t.id == trigger_id:
+                    trigger = t
+                    break
+
+            if trigger and not trigger.matches(state):
+                # State changed and no longer matches this trigger
+                triggers_to_cancel.append(trigger_id)
+
+        # Cancel all inconsistent triggers
+        for trigger_id in triggers_to_cancel:
+            self._cancel_pending_trigger(trigger_id)
+
+    async def _execute_state_trigger(self, trigger: StateTrigger, state: str) -> None:
+        """
+        Execute a state trigger with optional delay.
+
+        Args:
+            trigger: The StateTrigger to execute.
+            state: The device state that triggered this execution.
+        """
+        try:
+            # Wait for the delay period if specified
+            if trigger.delay > 0:
+                await asyncio.sleep(trigger.delay)
+
+            logger.info(
+                "Executing state trigger '%s' for state '%s'",
+                trigger.id, state
+            )
+
+            # Execute the trigger command using ShellTask
+            shell_task = ShellTask(
+                id=trigger.id,
+                command=trigger.command,
+            )
+
+            # Execute the shell task
+            success, error_message = await shell_task.execute()
+            if success:
+                logger.debug(
+                    "State trigger '%s' executed successfully",
+                    trigger.id
+                )
+            else:
+                logger.warning(
+                    "State trigger '%s' execution failed: %s",
+                    trigger.id, error_message
+                )
+        except asyncio.CancelledError:
+            logger.debug("State trigger '%s' was cancelled", trigger.id)
+        except Exception as e:
+            logger.error(
+                "Error executing state trigger '%s': %s",
+                trigger.id, e
+            )

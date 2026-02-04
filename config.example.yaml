@@ -149,3 +149,20 @@ custom-triggers:
       type: gcode
       match: M7\.1
     command: "hass-cli service call homeassistant.turn_off --arguments entity_id=fan.laser_vent"
+
+  # Example: Job end notification (M2 or M30 command)
+  - id: job-end-notification
+    trigger:
+      type: gcode
+      match: M2|M30
+      behavior: forward
+      synchronize: false
+    command: "pb-cli send 'Laser Job Completed' 'Laser cutting/engraving job has finished.'"
+
+  # Example: Power off when idle
+  - id: idle-power-off
+    trigger:
+      type: state
+      match: Idle
+      delay: 300 #s (5 minutes)
+    command: "hass-cli service call homeassistant.turn_off --arguments entity_id=switch.laser_power"

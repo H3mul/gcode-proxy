@@ -6,7 +6,7 @@ serial communication with GRBL-compatible devices using asyncio.
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 from gcode_proxy.core.utils import clean_grbl_response
 from gcode_proxy.core.logging import log_gcode_recv, log_gcode_sent, get_logger

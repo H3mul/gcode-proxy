@@ -281,7 +281,7 @@ class GCodeServer:
         # Check for triggers using the singleton trigger manager
         tasks_to_queue: list[Task] | None = None
         trigger_manager = TriggerManager.get_instance()
-        if trigger_manager and trigger_manager.triggers:
+        if trigger_manager:
             tasks_to_queue = trigger_manager.build_tasks_for_gcode(
                 command,
                 client_uuid,

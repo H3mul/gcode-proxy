@@ -22,6 +22,7 @@ from gcode_proxy.core.utils import (
 from gcode_proxy.device.device import GCodeDevice
 from gcode_proxy.device.grbl_device_status import GrblDeviceState, GrblDeviceStatus, HomingStatus
 from gcode_proxy.device.interface import GCodeSerialProtocol
+from gcode_proxy.trigger import TriggerManager
 
 logger = get_logger()
 
@@ -677,6 +678,9 @@ class GrblDevice(GCodeDevice):
         # Handle state changes
         if self._device_state.status != old_status:
             logger.debug(f"Device changed state from {old_status} to {self._device_state.status}")
+
+            # Trigger state-based triggers asynchronously
+            asyncio.create_task(TriggerManager().on_device_status(self._device_state.status))
 
             # Redundancy check for ALARM state to reinitialize (in case we missed ALARM: message)
             if self.device_state == GrblDeviceStatus.ALARM.value:
