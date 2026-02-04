@@ -29,7 +29,6 @@ logging.addLevelName(VERBOSE, "VERBOSE")
 GCODE_LOGGER_ID = "gcode"
 TCP_LOGGER_ID = "tcp"
 
-
 DATE_FMT = "%Y-%m-%d %H:%M:%S"
 LOG_FMT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 COMM_LOG_FMT = "%(asctime)s - %(source)s: %(message)s"
@@ -94,48 +93,37 @@ def setup_logging(
     logging.basicConfig(level=level, format=LOG_FMT, datefmt=DATE_FMT)
 
     # Optional: set up separate logger for GCode file logging
-    if gcode_log_file:
-        setup_file_logger(gcode_log_file, GCODE_LOGGER_ID)
+    setup_file_logger(gcode_log_file, GCODE_LOGGER_ID)
 
     # Optional: set up separate logger for TCP file logging
-    if tcp_log_file:
-        setup_file_logger(tcp_log_file, TCP_LOGGER_ID)
+    setup_file_logger(tcp_log_file, TCP_LOGGER_ID)
 
 
-def setup_file_logger(log_file: str, logger_id: str = GCODE_LOGGER_ID) -> None:
+def setup_file_logger(log_file: str | None, logger_id: str = GCODE_LOGGER_ID) -> None:
     try:
-        # Ensure log file path exists
-        log_path = Path(log_file)
-        if log_path.parent:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-        if not log_path.exists():
-            log_path.touch()
+        if log_file:
+            # Ensure log file path exists
+            log_path = Path(log_file)
+            if log_path.parent:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+            if not log_path.exists():
+                log_path.touch()
 
-        file_logger = logging.getLogger(logger_id)
-
-        # Check if a FileHandler for this exact path already exists
-        existing_same_file = False
-        for h in file_logger.handlers:
-            if isinstance(h, logging.FileHandler):
-                try:
-                    if Path(getattr(h, "baseFilename", "")).resolve() == log_path.resolve():
-                        existing_same_file = True
-                        break
-                except Exception:
-                    continue
-
-        if not existing_same_file:
-            # Remove any existing file handlers to avoid duplicates
-            for h in list(file_logger.handlers):
-                if isinstance(h, logging.FileHandler):
-                    file_logger.removeHandler(h)
             fh = logging.FileHandler(str(log_path), encoding="utf-8", mode="a")
 
             # Use the same format as stdout logging for consistency
             fh.setFormatter(logging.Formatter(COMM_LOG_FMT, datefmt=DATE_FMT))
             fh.setLevel(logging.INFO)
-            file_logger.addHandler(fh)
+        else:
+            fh = logging.NullHandler()
 
+        file_logger = logging.getLogger(logger_id)
+
+        # Check if a FileHandler for this exact path already exists
+        for h in file_logger.handlers:
+            file_logger.removeHandler(h)
+
+        file_logger.addHandler(fh)
         file_logger.setLevel(logging.INFO)
 
         # Do not propagate to root logger - only write to file
