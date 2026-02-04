@@ -20,6 +20,7 @@ class Trigger:
 
     Triggers use regex patterns to match GCode commands and execute
     external commands (scripts, programs, etc.) when a match is found.
+    Optionally restricts matching to specific device states.
     """
 
     def __init__(self, config: CustomTriggerConfig):
@@ -43,6 +44,7 @@ class Trigger:
         self.id = config.id
         self.command = config.command
         self.synchronize = config.trigger.synchronize
+        self.state_restriction = config.trigger.state  # Optional state restriction
 
         # Compile the regex pattern for matching GCode
         try:
@@ -53,16 +55,22 @@ class Trigger:
                 f"'{config.trigger.match}': {e}"
             ) from e
 
-    def matches(self, gcode: str) -> bool:
+    def matches(self, gcode: str, current_state: str | None = None) -> bool:
         """
-        Check if the given GCode matches this trigger's pattern.
+        Check if the given GCode matches this trigger's pattern and state restriction.
 
         Args:
             gcode: The GCode command to test.
+            current_state: The current device state (required if trigger has state restriction).
 
         Returns:
-            True if the GCode matches the trigger pattern, False otherwise.
+            True if the GCode matches the trigger pattern and state restriction (if any).
         """
+        # Check state restriction if configured
+        if self.state_restriction is not None:
+            if current_state is None or current_state.strip() != self.state_restriction:
+                return False
+
         # Strip whitespace and newlines for comparison
         gcode_stripped = gcode.strip()
         return bool(self.pattern.search(gcode_stripped))

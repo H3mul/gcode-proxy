@@ -133,7 +133,8 @@ class GrblDevice(GCodeDevice):
         self._in_flight_queue: list[Task] = []
 
         # Device state tracking
-        self._device_state: GrblDeviceState | None = None
+        self._running: bool = False
+        self._device_state: GrblDeviceState | None = GrblDeviceState()
         self._liveness_task: asyncio.Task | None = None
         self._wait_for_device_task: asyncio.Task | None = None
         self._skippable_oks: int = 0
@@ -141,6 +142,9 @@ class GrblDevice(GCodeDevice):
         # Flow control for Hold state - allows pausing/resuming task processing
         self._resume_event = asyncio.Event()
         self._resume_event.set()  # Start in "resumed" state
+
+        # Set initial device state in trigger manager
+        self._device_state.status = GrblDeviceStatus.DISCONNECTED
 
         # Disconnect event for handling reconnection
         self._disconnect_event = asyncio.Event()
@@ -202,8 +206,6 @@ class GrblDevice(GCodeDevice):
             baudrate=self.baud_rate,
         )
 
-        self._device_state = GrblDeviceState()
-
         # Flush any startup messages from the device
         await self._flush_input()
 
@@ -252,6 +254,10 @@ class GrblDevice(GCodeDevice):
         # Reset device state
         self._device_state = GrblDeviceState()
 
+        # Set initial device state in trigger manager
+        trigger_manager = TriggerManager.get_instance()
+        trigger_manager.set_current_device_state(self._device_state.status)
+
         # Reset resume event (allow processing to continue)
         self._resume_event.set()
 
@@ -280,6 +286,8 @@ class GrblDevice(GCodeDevice):
         self._response_loop_task = None
         self._liveness_task = None
 
+        await self._force_state_transition(GrblDeviceStatus.DISCONNECTED)
+
         if self._protocol:
             try:
                 self._protocol.close()
@@ -305,11 +313,26 @@ class GrblDevice(GCodeDevice):
         logger.verbose(f"Received task: {repr(task)}")
 
         # Quick response gate: reject tasks if device is offline
-        if not self._connected:
+        if not self._connected and isinstance(task, GCodeTask):
             logger.warning(f"Device offline, rejecting task: {repr(task)}")
             if task.should_respond:
                 task.send_response("error: device offline")
             return
+
+        if not self._running and isinstance(task, ShellTask):
+            response = ""
+            try:
+                logger.debug(f"Executing shell task while device offline: {task.id}")
+                success_val, error_msg = await task.execute()
+                response = "ok" if success_val else f"error: {error_msg}"
+            except Exception as e:
+                logger.error(f"Error executing shell task {task.id}: {e}")
+                response = f"error: {e}"
+            finally:
+                if task.should_respond:
+                    task.send_response(response)
+
+                logger.verbose(f"Completed task: {repr(task)}")
 
         # Check if this is a real-time command and handle it immediately
         if await self._handle_realtime_commands(task):
@@ -507,7 +530,8 @@ class GrblDevice(GCodeDevice):
                 try:
                     await self.disconnect()
                 except Exception as e:
-                    logger.error(f"Error during disconnect cleanup: {e}")
+                    # logger.error(f"Error during disconnect cleanup: {e}")
+                    raise e
 
                 # Attempt to reconnect
                 try:
@@ -542,14 +566,12 @@ class GrblDevice(GCodeDevice):
             logger.warning(f"Received device alarm: {line}")
             # Set device state preemptively to Alarm
             if self._device_state:
-                self._device_state.status = GrblDeviceStatus.ALARM
+                await self._force_state_transition(GrblDeviceStatus.ALARM)
                 logger.verbose(f"Device state updated preemptively to: {self._device_state.status}")
             await self._broadcast_data_to_clients(line)
             await self._initialize_device()
 
         elif line.startswith("<"):
-            if self.status_behavior == StatusBehavior.FORWARD:
-                await self._respond_to_client(line)
             await self._handle_state_update(line)
 
         elif line.startswith("["):
@@ -616,20 +638,11 @@ class GrblDevice(GCodeDevice):
         elif gcode == "?":
             logger.verbose("Real-time command: Status query (?)")
 
-            if self.status_behavior == StatusBehavior.FORWARD:
-                # Forward mode: send query to device and track as in-flight
-                logger.verbose("Status query forwarded to device (forward mode)")
-                # Push as oldest in-flight command to be responded to next
-                self._in_flight_queue.insert(0, task)
-                await self._send(GCodeTask(gcode=gcode))
-            else:
-                # liveness-cache mode: serve from cached state
-                if self._device_state and self._device_state.status_line:
-                    # Send the cached status report to the client
-                    status_report = self._device_state.status_line
-                    if task.should_respond:
-                        task.send_response(status_report + "\nok\n")
-                        logger.verbose(f"Sent cached status report to client: {status_report}")
+            # Forward mode: send query to device and track as in-flight
+            logger.verbose("Status query forwarded to device (forward mode)")
+            # Push as oldest in-flight command to be responded to next
+            self._in_flight_queue.insert(0, task)
+            await self._send(GCodeTask(gcode=gcode))
             return True
 
         # Handle feed hold (!)
@@ -637,7 +650,7 @@ class GrblDevice(GCodeDevice):
             logger.debug("Real-time command: Feed hold (!)")
             # Update device state preemptively to Hold
             if self._device_state:
-                self._device_state.status = GrblDeviceStatus.HOLD
+                await self._force_state_transition(GrblDeviceStatus.HOLD)
                 logger.verbose(f"Device state updated preemptively to: {self._device_state.status}")
             # Pause task processing by clearing the resume event
             self._resume_event.clear()
@@ -645,10 +658,12 @@ class GrblDevice(GCodeDevice):
         # Handle cycle start/resume (~)
         elif gcode == "~":
             logger.debug("Real-time command: Cycle start/resume (~)")
+
             # Update device state preemptively to Run
             if self._device_state:
-                self._device_state.status = GrblDeviceStatus.RUN
+                await self._force_state_transition(GrblDeviceStatus.RUN)
                 logger.verbose(f"Device state updated preemptively to: {self._device_state.status}")
+
             # Resume task processing by setting the resume event
             self._resume_event.set()
 
@@ -675,40 +690,74 @@ class GrblDevice(GCodeDevice):
         old_status = self._device_state.status
         self._device_state.update_status(line)
 
-        # Handle state changes
         if self._device_state.status != old_status:
-            logger.debug(f"Device changed state from {old_status} to {self._device_state.status}")
+            await self._handle_state_transitition(old_status)
 
-            # Trigger state-based triggers asynchronously
-            asyncio.create_task(TriggerManager().on_device_status(self._device_state.status))
+    async def _force_state_transition(self, new_status: GrblDeviceStatus) -> None:
+        """
+        Force a device state transition to a new status.
 
-            # Redundancy check for ALARM state to reinitialize (in case we missed ALARM: message)
-            if self.device_state == GrblDeviceStatus.ALARM.value:
-                logger.warning("Device state changed to Alarm, reinitializing device")
-                await self._initialize_device()
+        This method is used to manually set the device state and trigger
+        any associated actions for the state transition.
 
-            # We finished homing, but the homing "ok" hasn't arrived yet
-            if (
-                self._device_state.homing == HomingStatus.QUEUED
-                and old_status == GrblDeviceStatus.HOME.value
-                and self._device_state.status == GrblDeviceStatus.IDLE.value
-            ):
-                logger.verbose("Detected homing task end via state update")
-                self._device_state.homing = HomingStatus.COMPLETE
+        Args:
+            new_status: The new device status to set.
+        """
 
-                # Allow some time for the ok to arrive,
-                # then complete the homing task when we're sure it won't
-                async def complete_homing_task():
-                    await asyncio.sleep(CONFIRMATION_DELIVERY_GRACE_PERIOD / 1000)
-                    if (
-                        self._is_homing_in_flight()
-                        and self._device_state
-                        and self._device_state.homing == HomingStatus.COMPLETE
-                    ):
-                        logger.info("Homing 'ok' lost, completing homing task based on Idle")
-                        await self._handle_task_completion("ok", success=True)
+        if not self._device_state:
+            self._device_state = GrblDeviceState()
 
-                asyncio.create_task(complete_homing_task())
+        old_status = self._device_state.status
+        self._device_state.status = new_status
+
+        if self._device_state.status != old_status:
+            await self._handle_state_transitition(old_status)
+
+    async def _handle_state_transitition(self, old_status: str) -> None:
+        """
+        Handle actions needed on device state transitions
+        Current status is already set in self._device_state.
+        Args:
+            old_status: The previous device status before the transition.
+        """
+
+        if not self._device_state:
+            return
+
+        # Handle state changes
+        logger.debug(f"Device changed state from {old_status} to {self._device_state.status}")
+
+        # Update current device state in trigger manager and trigger state-based triggers
+        trigger_manager = TriggerManager.get_instance()
+        asyncio.create_task(trigger_manager.on_device_status(self._device_state.status))
+
+        # Redundancy check for ALARM state to reinitialize (in case we missed ALARM: message)
+        if self.device_state == GrblDeviceStatus.ALARM.value:
+            logger.warning("Device state changed to Alarm, reinitializing device")
+            await self._initialize_device()
+
+        # We finished homing, but the homing "ok" hasn't arrived yet
+        if (
+            self._device_state.homing == HomingStatus.QUEUED
+            and old_status == GrblDeviceStatus.HOME.value
+            and self._device_state.status == GrblDeviceStatus.IDLE.value
+        ):
+            logger.verbose("Detected homing task end via state update")
+            self._device_state.homing = HomingStatus.COMPLETE
+
+            # Allow some time for the ok to arrive,
+            # then complete the homing task when we're sure it won't
+            async def complete_homing_task():
+                await asyncio.sleep(CONFIRMATION_DELIVERY_GRACE_PERIOD / 1000)
+                if (
+                    self._is_homing_in_flight()
+                    and self._device_state
+                    and self._device_state.homing == HomingStatus.COMPLETE
+                ):
+                    logger.info("Homing 'ok' lost, completing homing task based on Idle")
+                    await self._handle_task_completion("ok", success=True)
+
+            asyncio.create_task(complete_homing_task())
 
     async def _handle_task_completion(self, response_line: str, success: bool) -> None:
         """

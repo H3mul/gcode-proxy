@@ -44,18 +44,20 @@ class GCodeTriggerConfig:
     """Configuration for GCode-based triggers.
 
     This matches GCode commands using regex patterns.
+    Optionally restricts trigger to specific device states.
     """
 
     type: str
     match: str
     synchronize: bool = True
+    state: str | None = None  # Optional device state restriction
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GCodeTriggerConfig":
         """Create a GCodeTriggerConfig from a dictionary.
 
         Args:
-            data: Dictionary containing 'type', 'match', 'behavior', and 'synchronize' keys.
+            data: Dictionary containing 'type', 'match', 'behavior', 'synchronize', and optional 'state' keys.
 
         Returns:
             GCodeTriggerConfig instance.
@@ -69,6 +71,9 @@ class GCodeTriggerConfig:
         trigger_type = data.get("type", "").strip()
         match_pattern = data.get("match", "").strip()
         synchronize = data.get("synchronize", True)
+        state_restriction = data.get("state")
+        if state_restriction:
+            state_restriction = state_restriction.strip()
 
         if not trigger_type:
             raise ValueError("Trigger 'type' is required")
@@ -82,6 +87,7 @@ class GCodeTriggerConfig:
             type=trigger_type,
             match=match_pattern,
             synchronize=bool(synchronize),
+            state=state_restriction,
         )
 
 

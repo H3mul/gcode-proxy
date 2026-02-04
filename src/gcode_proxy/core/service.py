@@ -155,13 +155,12 @@ class GCodeProxyService:
         Runs until interrupted.
         """
         try:
-            # Connect to the device (this starts the task processing loop)
-            await self.device.connect()
-            await self.connection_manager.start()
-
             # Start and run the server
             await self.server.serve_forever()
+            await self.connection_manager.start()
 
+            # Connect to the device (this starts the task processing loop)
+            await self.device.connect()
         finally:
             # Clean up
             await self.server.stop()
@@ -174,9 +173,9 @@ class GCodeProxyService:
 
         Use this when you want to run the service in the background.
         """
-        await self.device.connect()
-        await self.connection_manager.start()
         await self.server.start()
+        await self.connection_manager.start()
+        await self.device.connect()
 
     async def stop(self) -> None:
         """Stop the service."""

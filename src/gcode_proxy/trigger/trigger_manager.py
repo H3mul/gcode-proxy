@@ -13,6 +13,7 @@ from gcode_proxy.core.logging import get_logger
 from .trigger import Trigger, StateTrigger
 from .triggers_config import CustomTriggerConfig, GCodeTriggerConfig, StateTriggerConfig
 from gcode_proxy.core.task import Task, ShellTask
+from gcode_proxy.device.grbl_device_status import GrblDeviceStatus
 
 logger = get_logger()
 
@@ -53,6 +54,8 @@ class TriggerManager:
     state_triggers: list[StateTrigger] = []
     # Maps trigger ID to pending task for state triggers
     _pending_state_triggers: dict[str, asyncio.Task] = {}
+    # Current device state for state-restricted gcode triggers
+    _current_device_state: str | None = GrblDeviceStatus.DISCONNECTED
 
     def __new__(cls) -> "TriggerManager":
         """
@@ -150,11 +153,12 @@ class TriggerManager:
                     if not task.done():
                         task.cancel()
                 cls._instance._pending_state_triggers.clear()
+                cls._instance._current_device_state = None
             cls._instance = None
 
     def find_matching_gcode_triggers(self, gcode: str) -> list[Trigger]:
         """
-        Find all GCode triggers that match the given GCode.
+        Find all GCode triggers that match the given GCode and device state restrictions.
 
         Args:
             gcode: The raw GCode command string.
@@ -162,7 +166,10 @@ class TriggerManager:
         Returns:
             List of matching Trigger instances (empty list if none match).
         """
-        matching = [trigger for trigger in self.gcode_triggers if trigger.matches(gcode)]
+        matching = [
+            trigger for trigger in self.gcode_triggers
+            if trigger.matches(gcode, self._current_device_state)
+        ]
         return matching
 
     def find_matching_state_triggers(self, state: str) -> list[StateTrigger]:
@@ -189,6 +196,9 @@ class TriggerManager:
         If any triggers match the command, returns a list of tasks including:
         - Optional GCodeTask with synchronization command (G4 P0) if synchronize=true
         - ShellTask for the trigger command
+
+        Triggers may have an optional state restriction, which limits matching to
+        specific device states (e.g., only trigger when device is in "Idle" state).
 
         If no triggers match, returns None. The server should then create
         a simple GCodeTask with the original command.
@@ -238,6 +248,18 @@ class TriggerManager:
                 task.cancel()
             del self._pending_state_triggers[trigger_id]
 
+    def set_current_device_state(self, state: str) -> None:
+        """
+        Update the current device state.
+
+        This is called by the device when state changes and is used to restrict
+        GCode trigger matching to specific device states.
+
+        Args:
+            state: The new device state (e.g., 'Idle', 'Run', 'Hold').
+        """
+        self._current_device_state = state
+
     async def on_device_status(self, state: str) -> None:
         """
         Handle a device status change by executing matching state triggers.
@@ -255,6 +277,9 @@ class TriggerManager:
         Args:
             state: The new device state (e.g., 'Idle', 'Run', 'Hold').
         """
+        # Update current device state for state-restricted gcode triggers
+        self.set_current_device_state(state)
+
         # First, handle consistency: cancel pending triggers that no longer match
         self._check_consistency_for_pending_triggers(state)
 

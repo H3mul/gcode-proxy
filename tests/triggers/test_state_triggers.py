@@ -617,3 +617,319 @@ class TestTriggerManager:
         # Task should be cancelled
         assert task.cancelled()
         assert "idle-trigger" not in manager._pending_state_triggers
+
+
+class TestGCodeTriggerConfig:
+    """Tests for GCodeTriggerConfig with state restrictions."""
+
+    def test_gcode_trigger_config_without_state(self):
+        """Test GCodeTriggerConfig without state restriction."""
+        config = GCodeTriggerConfig(
+            type="gcode",
+            match="M8",
+            synchronize=False
+        )
+        assert config.type == "gcode"
+        assert config.match == "M8"
+        assert config.state is None
+
+    def test_gcode_trigger_config_with_state(self):
+        """Test GCodeTriggerConfig with state restriction."""
+        config = GCodeTriggerConfig(
+            type="gcode",
+            match="M8",
+            state="Idle"
+        )
+        assert config.type == "gcode"
+        assert config.match == "M8"
+        assert config.state == "Idle"
+
+    def test_gcode_trigger_config_from_dict_with_state(self):
+        """Test creating GCodeTriggerConfig from dict with state."""
+        data = {
+            "type": "gcode",
+            "match": "M8",
+            "state": "Idle"
+        }
+        config = GCodeTriggerConfig.from_dict(data)
+        assert config.state == "Idle"
+
+    def test_gcode_trigger_config_from_dict_without_state(self):
+        """Test creating GCodeTriggerConfig from dict without state."""
+        data = {
+            "type": "gcode",
+            "match": "M8"
+        }
+        config = GCodeTriggerConfig.from_dict(data)
+        assert config.state is None
+
+    def test_gcode_trigger_config_state_stripped(self):
+        """Test that state is stripped of whitespace."""
+        data = {
+            "type": "gcode",
+            "match": "M8",
+            "state": "  Idle  "
+        }
+        config = GCodeTriggerConfig.from_dict(data)
+        assert config.state == "Idle"
+
+
+class TestTriggerWithStateRestriction:
+    """Tests for Trigger class with state restrictions."""
+
+    def test_trigger_matches_without_state_restriction(self):
+        """Test that trigger without state restriction matches any state."""
+        config = CustomTriggerConfig(
+            id="air-on",
+            trigger=GCodeTriggerConfig(
+                type="gcode",
+                match="M8",
+                state=None
+            ),
+            command="echo 'Air on'"
+        )
+        trigger = Trigger(config)
+        
+        assert trigger.matches("M8")
+        assert trigger.matches("M8", "Idle")
+        assert trigger.matches("M8", "Run")
+        assert trigger.matches("M8", "Hold")
+
+    def test_trigger_matches_with_state_restriction(self):
+        """Test that trigger with state restriction only matches in that state."""
+        config = CustomTriggerConfig(
+            id="air-on",
+            trigger=GCodeTriggerConfig(
+                type="gcode",
+                match="M8",
+                state="Idle"
+            ),
+            command="echo 'Air on'"
+        )
+        trigger = Trigger(config)
+        
+        # Matches only when state is "Idle"
+        assert trigger.matches("M8", "Idle")
+        
+        # Doesn't match in other states
+        assert not trigger.matches("M8", "Run")
+        assert not trigger.matches("M8", "Hold")
+        assert not trigger.matches("M8", None)
+
+    def test_trigger_state_restriction_with_whitespace(self):
+        """Test that state comparison handles whitespace."""
+        config = CustomTriggerConfig(
+            id="air-on",
+            trigger=GCodeTriggerConfig(
+                type="gcode",
+                match="M8",
+                state="Idle"
+            ),
+            command="echo 'Air on'"
+        )
+        trigger = Trigger(config)
+        
+        # Should match even with whitespace (stripped in matches())
+        assert trigger.matches("M8", "  Idle  ")
+
+    def test_trigger_gcode_match_with_state_restriction(self):
+        """Test that both GCode and state must match."""
+        config = CustomTriggerConfig(
+            id="air-on",
+            trigger=GCodeTriggerConfig(
+                type="gcode",
+                match="M8",
+                state="Idle"
+            ),
+            command="echo 'Air on'"
+        )
+        trigger = Trigger(config)
+        
+        # GCode must match
+        assert trigger.matches("M8", "Idle")
+        assert not trigger.matches("M9", "Idle")  # Wrong GCode
+        assert not trigger.matches("M8", "Run")   # Wrong state
+
+
+class TestTriggerManagerWithStateRestrictions:
+    """Tests for TriggerManager with state-restricted GCode triggers."""
+
+    def setup_method(self):
+        """Reset TriggerManager before each test."""
+        TriggerManager.reset()
+
+    def test_trigger_manager_tracks_current_state(self):
+        """Test that TriggerManager tracks current device state."""
+        manager = TriggerManager.get_instance()
+        assert manager._current_device_state is None
+        
+        manager.set_current_device_state("Idle")
+        assert manager._current_device_state == "Idle"
+        
+        manager.set_current_device_state("Run")
+        assert manager._current_device_state == "Run"
+
+    def test_find_gcode_triggers_respects_state_restriction(self):
+        """Test that find_matching_gcode_triggers respects state restrictions."""
+        configs = [
+            CustomTriggerConfig.from_dict({
+                "id": "air-on-idle",
+                "trigger": {
+                    "type": "gcode",
+                    "match": "M8",
+                    "state": "Idle"
+                },
+                "command": "echo 'Air on'"
+            }),
+            CustomTriggerConfig.from_dict({
+                "id": "air-on-any",
+                "trigger": {
+                    "type": "gcode",
+                    "match": "M8"
+                },
+                "command": "echo 'Air on'"
+            })
+        ]
+        manager = TriggerManager.get_instance()
+        manager.load_from_config(configs)
+        
+        # When in Idle state, both triggers match
+        manager.set_current_device_state("Idle")
+        matching = manager.find_matching_gcode_triggers("M8")
+        assert len(matching) == 2
+        
+        # When in Run state, only the unrestricted trigger matches
+        manager.set_current_device_state("Run")
+        matching = manager.find_matching_gcode_triggers("M8")
+        assert len(matching) == 1
+        assert matching[0].id == "air-on-any"
+
+    def test_build_tasks_with_state_restriction(self):
+        """Test that build_tasks_for_gcode respects state restrictions."""
+        configs = [
+            CustomTriggerConfig.from_dict({
+                "id": "air-on",
+                "trigger": {
+                    "type": "gcode",
+                    "match": "M8",
+                    "state": "Idle"
+                },
+                "command": "echo 'Air on'"
+            })
+        ]
+        manager = TriggerManager.get_instance()
+        manager.load_from_config(configs)
+        
+        # When in Idle state, trigger matches
+        manager.set_current_device_state("Idle")
+        tasks = manager.build_tasks_for_gcode("M8", "client-uuid")
+        assert tasks is not None
+        assert len(tasks) == 1
+        
+        # When in Run state, trigger doesn't match
+        manager.set_current_device_state("Run")
+        tasks = manager.build_tasks_for_gcode("M8", "client-uuid")
+        assert tasks is None
+
+    def test_state_restriction_with_regex_pattern(self):
+        """Test state restriction combined with regex GCode patterns."""
+        configs = [
+            CustomTriggerConfig.from_dict({
+                "id": "power-on",
+                "trigger": {
+                    "type": "gcode",
+                    "match": ".*",
+                    "state": "Disconnected"
+                },
+                "command": "echo 'Power on'"
+            })
+        ]
+        manager = TriggerManager.get_instance()
+        manager.load_from_config(configs)
+        
+        # Should only match when in Disconnected state
+        manager.set_current_device_state("Disconnected")
+        matching = manager.find_matching_gcode_triggers("G0")
+        assert len(matching) == 1
+        
+        manager.set_current_device_state("Idle")
+        matching = manager.find_matching_gcode_triggers("G0")
+        assert len(matching) == 0
+
+    async def test_state_restriction_during_device_status_update(self):
+        """Test that state is updated during on_device_status call."""
+        configs = [
+            CustomTriggerConfig.from_dict({
+                "id": "air-on",
+                "trigger": {
+                    "type": "gcode",
+                    "match": "M8",
+                    "state": "Idle"
+                },
+                "command": "echo 'Air on'"
+            })
+        ]
+        manager = TriggerManager.get_instance()
+        manager.load_from_config(configs)
+        
+        # Initially no state
+        assert manager._current_device_state is None
+        
+        # After state update, state should be set
+        await manager.on_device_status("Idle")
+        assert manager._current_device_state == "Idle"
+        
+        # After another update
+        await manager.on_device_status("Run")
+        assert manager._current_device_state == "Run"
+
+    def test_multiple_state_restrictions(self):
+        """Test multiple GCode triggers with different state restrictions."""
+        configs = [
+            CustomTriggerConfig.from_dict({
+                "id": "air-on-idle",
+                "trigger": {
+                    "type": "gcode",
+                    "match": "M8",
+                    "state": "Idle"
+                },
+                "command": "echo 'Air on'"
+            }),
+            CustomTriggerConfig.from_dict({
+                "id": "air-on-run",
+                "trigger": {
+                    "type": "gcode",
+                    "match": "M8",
+                    "state": "Run"
+                },
+                "command": "echo 'Air on while running'"
+            }),
+            CustomTriggerConfig.from_dict({
+                "id": "air-on-always",
+                "trigger": {
+                    "type": "gcode",
+                    "match": "M8"
+                },
+                "command": "echo 'Air on (no restriction)'"
+            })
+        ]
+        manager = TriggerManager.get_instance()
+        manager.load_from_config(configs)
+        
+        # In Idle state
+        manager.set_current_device_state("Idle")
+        matching = manager.find_matching_gcode_triggers("M8")
+        assert len(matching) == 2  # idle and always
+        assert set(t.id for t in matching) == {"air-on-idle", "air-on-always"}
+        
+        # In Run state
+        manager.set_current_device_state("Run")
+        matching = manager.find_matching_gcode_triggers("M8")
+        assert len(matching) == 2  # run and always
+        assert set(t.id for t in matching) == {"air-on-run", "air-on-always"}
+        
+        # In Hold state
+        manager.set_current_device_state("Hold")
+        matching = manager.find_matching_gcode_triggers("M8")
+        assert len(matching) == 1  # only always
+        assert matching[0].id == "air-on-always"
