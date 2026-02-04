@@ -370,7 +370,7 @@ class GrblDevice(GCodeDevice):
                 # Check if this is a GCodeTask and if it fits in the buffer
                 if self.task_queue._queue[0].char_count > self._buffer_quota:  # pyright: ignore[reportAttributeAccessIssue]
                     logger.debug(
-                        f"Buffer too full for next task: {repr(self.task_queue._queue[0])}" # pyright: ignore[reportAttributeAccessIssue]
+                        f"Device buffer too full for next task, backing off "
                         f"({self._buffer_quota * 100.0 / self.grbl_buffer_size}%)"
                     )
                     break
@@ -392,7 +392,7 @@ class GrblDevice(GCodeDevice):
                         self._device_state.homing = HomingStatus.QUEUED
 
                 if isinstance(task, ShellTask) and task.wait_for_idle:
-                    logger.debug(
+                    logger.verbose(
                         f"Injecting dwell before executing shell task and pausing buffer fill: "
                         f"{task.id}"
                     )
@@ -542,7 +542,7 @@ class GrblDevice(GCodeDevice):
             # Set device state preemptively to Alarm
             if self._device_state:
                 self._device_state.status = GrblDeviceStatus.ALARM
-                logger.debug(f"Device state updated preemptively to: {self._device_state.status}")
+                logger.verbose(f"Device state updated preemptively to: {self._device_state.status}")
             await self._broadcast_data_to_clients(line)
             await self._initialize_device()
 
@@ -563,7 +563,7 @@ class GrblDevice(GCodeDevice):
             await self._initialize_device()
 
         else:
-            logger.debug(f"Device response: {line}")
+            logger.debug(f"Unhandled device response: {line}")
 
     async def _handle_ok_response(self, line: str) -> None:
         """
@@ -637,7 +637,7 @@ class GrblDevice(GCodeDevice):
             # Update device state preemptively to Hold
             if self._device_state:
                 self._device_state.status = GrblDeviceStatus.HOLD
-                logger.debug(f"Device state updated preemptively to: {self._device_state.status}")
+                logger.verbose(f"Device state updated preemptively to: {self._device_state.status}")
             # Pause task processing by clearing the resume event
             self._resume_event.clear()
 
@@ -647,7 +647,7 @@ class GrblDevice(GCodeDevice):
             # Update device state preemptively to Run
             if self._device_state:
                 self._device_state.status = GrblDeviceStatus.RUN
-                logger.debug(f"Device state updated preemptively to: {self._device_state.status}")
+                logger.verbose(f"Device state updated preemptively to: {self._device_state.status}")
             # Resume task processing by setting the resume event
             self._resume_event.set()
 
@@ -743,7 +743,7 @@ class GrblDevice(GCodeDevice):
 
             # Make sure we finish homing tracking in case we got an ok before state change
             if self._is_homing(completed_task) and self._device_state:
-                logger.debug(
+                logger.verbose(
                     f"Completing homing tracking: ok received (task: {repr(completed_task)})"
                 )
                 self._device_state.homing = HomingStatus.OFF
@@ -774,7 +774,7 @@ class GrblDevice(GCodeDevice):
                     # Resume buffer filling, this task caused it to pause
                     self.buffer_paused = False
 
-                logger.debug(f"Executing shell task during drain: {shell_task.id}")
+                logger.verbose(f"Executing shell task during drain: {shell_task.id}")
                 response = ""
                 try:
                     success_val, error_msg = await shell_task.execute()
@@ -893,7 +893,7 @@ class GrblDevice(GCodeDevice):
         if not is_immediate_grbl_command(task.gcode):
             # Deduct from quota and add to in-flight
             self._buffer_quota -= task.char_count
-            logger.debug(
+            logger.verbose(
                 f"Buffer quota deducted after sending task: {self._buffer_quota}"
                 f"({self._buffer_quota * 100.0 / self.grbl_buffer_size}%), task: {repr(task.gcode)}"
             )
