@@ -155,7 +155,7 @@ custom-triggers:
     trigger:
       type: gcode
       match: (M2$)|(M30$)
-      behavior: forward
+      behavior: forward # Don't eat the command
       synchronize: false
     command: "pb push -t 'Laser Job Completed' 'Laser cutting/engraving job has finished.'"
 
@@ -171,7 +171,8 @@ custom-triggers:
   - id: power-on
     trigger:
       type: gcode
-      match: .*
+      match: .*  # -- matches any gcode that is not a status query
       state: Disconnected
+      behavior: forward # Don't eat the command
       synchronize: false
     command: "hass-cli service call homeassistant.turn_on --arguments entity_id=switch.laser_power"

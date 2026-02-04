@@ -233,7 +233,7 @@ class GrblDevice(GCodeDevice):
         and clears the ok swallowing counter. Called during device connection
         and when the device restarts (ALARM or Grbl response, or receiving 0x18 command).
         """
-        logger.info("Initializing device state and queues")
+        logger.debug("Initializing device state and queues")
 
         # Clear the task queue
         self.clear_queue()
@@ -315,7 +315,7 @@ class GrblDevice(GCodeDevice):
 
         # Quick response gate: reject tasks if device is offline
         if not self._connected and isinstance(task, GCodeTask):
-            logger.warning(f"Device offline, rejecting task: {repr(task)}")
+            logger.debug(f"Device offline, rejecting task: {repr(task)}")
             if task.should_respond:
                 task.send_response("error: device offline")
             return
@@ -394,7 +394,7 @@ class GrblDevice(GCodeDevice):
 
                 # Check if this is a GCodeTask and if it fits in the buffer
                 if self.task_queue._queue[0].char_count > self._buffer_quota:  # pyright: ignore[reportAttributeAccessIssue]
-                    logger.debug(
+                    logger.verbose(
                         f"Device buffer too full for next task, backing off "
                         f"({self._buffer_quota * 100.0 / self.grbl_buffer_size}%)"
                     )
@@ -582,7 +582,7 @@ class GrblDevice(GCodeDevice):
             await self._respond_to_client(line)
 
         elif "Grbl " in line:
-            logger.info(f"Device initialization message: {line}")
+            logger.debug(f"Device initialization message: {line}")
             await self._broadcast_data_to_clients(line)
             await self._initialize_device()
 

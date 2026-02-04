@@ -121,6 +121,8 @@ class ConnectionManager:
         """
 
         client_address = self.get_client_address(client_uuid)
+        if client_address is None:
+            return "Unknown"
         return f"{client_address[0]}:{client_address[1]}"
 
     def submit_task(self, task: ConnectionTask) -> None:
@@ -232,7 +234,7 @@ class ConnectionManager:
             if writer:
                 writers = [writer]
             else:
-                logger.warning(f"Target UUID {task.target_uuid} not found for task {task.action}")
+                logger.verbose(f"Target UUID {task.target_uuid} not found for task {task.action}")
                 return
 
         for writer in writers:
@@ -245,7 +247,8 @@ class ConnectionManager:
                         writer.write(data.encode('utf-8'))
                         await writer.drain()
 
-                        log_tcp_sent(data.strip(), self.get_client_address(task.target_uuid))
+                        log_tcp_sent(data.strip(),
+                            self.get_client_address(task.target_uuid) if task.target_uuid else None)
 
                 if task.action in (ConnectionAction.CLOSE_SOCKET, ConnectionAction.SEND_AND_CLOSE):
                     writer.close()

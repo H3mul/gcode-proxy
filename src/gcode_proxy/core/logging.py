@@ -99,8 +99,16 @@ def setup_logging(
     setup_file_logger(tcp_log_file, TCP_LOGGER_ID)
 
 
-def setup_file_logger(log_file: str | None, logger_id: str = GCODE_LOGGER_ID) -> None:
+def setup_file_logger(log_file: str | None, logger_id) -> None:
+    file_logger = logging.getLogger(logger_id)
+
+    # Already configured
+    if file_logger.handlers and \
+        any(isinstance(h, logging.FileHandler) for h in file_logger.handlers):
+        return
+
     try:
+        fh = logging.NullHandler()
         if log_file:
             # Ensure log file path exists
             log_path = Path(log_file)
@@ -114,14 +122,6 @@ def setup_file_logger(log_file: str | None, logger_id: str = GCODE_LOGGER_ID) ->
             # Use the same format as stdout logging for consistency
             fh.setFormatter(logging.Formatter(COMM_LOG_FMT, datefmt=DATE_FMT))
             fh.setLevel(logging.INFO)
-        else:
-            fh = logging.NullHandler()
-
-        file_logger = logging.getLogger(logger_id)
-
-        # Check if a FileHandler for this exact path already exists
-        for h in file_logger.handlers:
-            file_logger.removeHandler(h)
 
         file_logger.addHandler(fh)
         file_logger.setLevel(logging.INFO)
@@ -187,7 +187,7 @@ def log_gcode_recv(command: str):
     log_gcode_communication(command, sent=False)
 
 
-def log_tcp_communication(content: str | bytes, client_address: tuple[str, int], sent: bool):
+def log_tcp_communication(content: str | bytes, client_address: tuple[str, int] | None, sent: bool):
     # Assume broadcast if no client address provided
     source_str = "Broadcast"
     if client_address:
@@ -196,9 +196,9 @@ def log_tcp_communication(content: str | bytes, client_address: tuple[str, int],
         content, extra={"source": f"Sent {source_str}" if sent else f"Recv {source_str}"}
     )
 
-def log_tcp_sent(content: str | bytes, source: tuple[str, int]):
+def log_tcp_sent(content: str | bytes, source: tuple[str, int] | None):
     log_tcp_communication(content, source, sent=True)
 
 
-def log_tcp_recv(content: str | bytes, source: tuple[str, int]):
+def log_tcp_recv(content: str | bytes, source: tuple[str, int] | None):
     log_tcp_communication(content, source, sent=False)
