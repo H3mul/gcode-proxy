@@ -157,7 +157,7 @@ custom-triggers:
       match: M2|M30
       behavior: forward
       synchronize: false
-    command: "pb-cli send 'Laser Job Completed' 'Laser cutting/engraving job has finished.'"
+    command: "pb send 'Laser Job Completed' 'Laser cutting/engraving job has finished.'"
 
   # Example: Power off when idle
   - id: idle-power-off
