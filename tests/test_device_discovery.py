@@ -42,13 +42,15 @@ class TestWaitForDevice(unittest.TestCase):
     def test_wait_for_device_with_dev_path_retry(self, mock_serial):
         """Should retry if device path is not initially available."""
         # Fail twice then succeed
+        success_mock = MagicMock()
+        success_mock.__enter__.return_value = MagicMock()
+        success_mock.__exit__.return_value = None
+        
         mock_serial.side_effect = [
             serial.SerialException("Not found"),
             FileNotFoundError("Not found"),
-            MagicMock(),  # Success (returns a mock that works as context manager)
+            success_mock,
         ]
-        # Make sure the success mock works as context manager
-        mock_serial.side_effect[2].__enter__.return_value = MagicMock()
 
         async def run_test():
             return await wait_for_device(

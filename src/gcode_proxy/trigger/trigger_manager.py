@@ -60,7 +60,7 @@ class TriggerManager:
     # Maps trigger ID to pending task for state triggers
     _pending_state_triggers: dict[str, asyncio.Task] = {}
     # Current device state for state-restricted gcode triggers
-    _current_device_state: str | None = GrblDeviceStatus.DISCONNECTED
+    _current_device_state: str | None = None
 
     def __new__(cls) -> "TriggerManager":
         """
@@ -86,6 +86,11 @@ class TriggerManager:
         """
         # Triggers are initialized in __new__, so nothing to do here
         pass
+
+    @property
+    def _background_tasks(self) -> dict[str, asyncio.Task]:
+        """Alias for _pending_state_triggers for backward compatibility."""
+        return self._pending_state_triggers
 
     def load_from_config(
         self, trigger_configs: Sequence[CustomTriggerConfig]
@@ -300,6 +305,9 @@ class TriggerManager:
         # First, handle consistency: cancel pending triggers that no longer match
         self._check_consistency_for_pending_triggers(state)
 
+        # Yield to allow cancellations to be processed
+        await asyncio.sleep(0)
+
         # Find all triggers that match the new state
         matching_triggers = self.find_matching_state_triggers(state)
 
@@ -395,6 +403,7 @@ class TriggerManager:
                 )
         except asyncio.CancelledError:
             logger.debug("State trigger '%s' was cancelled", trigger.id)
+            raise
         except Exception as e:
             logger.error(
                 "Error executing state trigger '%s': %s",

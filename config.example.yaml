@@ -151,7 +151,7 @@ custom-triggers:
   - id: power-on
     trigger:
       type: gcode
-      match: .*  # -- matches any gcode that is not a status query
+      match: .*
       state: Disconnected
       behavior: forward # Don't eat the command
       synchronize: false

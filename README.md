@@ -16,15 +16,14 @@ A high-performance GCode proxy server that acts as a middleman between GCode str
 
 ### From Source
 
-Install the `gcode-proxy-server` command globally:
+Install the `gcode-proxy-server` command in venv:
 
 ```bash
-pip install https://github.com/H3mul/gcode-proxy.git
-```
-
-Install in a locally editable package:
-```bash
-pip install -e https://github.com/H3mul/gcode-proxy.git
+git clone https://github.com/H3mul/gcode-proxy.git
+cd gcode-proxy
+uv venv
+source .venv/bin/source
+uv pip install .
 ```
 
 ### Deployment Reference

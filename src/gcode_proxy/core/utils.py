@@ -119,6 +119,7 @@ async def wait_for_device(
 
         except asyncio.CancelledError:
             logger.debug("Device wait task cancelled")
+            raise
         except SerialDeviceNotFoundError:
             pass  # Continue polling
 

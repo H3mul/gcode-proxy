@@ -66,24 +66,30 @@ class GrblDeviceState:
     Represents the current status of a GRBL device.
 
     Parsed from the response to the `?` command:
+    <Idle,MPos:0.000,0.000,0.000,WPos:0.000,0.000,0.000,Buf:0,RX:0>
     <Idle|MPos:3.000,3.000,0.000|FS:0,0>
-    <Idle,MPos:0.000,0.000,0.000,WPos:0.000,0.000,0.000>
 
     Attributes:
         state: Device state (Idle, Run, Hold, Door, Alarm, etc.)
+        mpos: Machine position as (X, Y, Z) tuple in mm or inches
+        wpos: Work position as (X, Y, Z) tuple in mm or inches
+        buf: Number of motions queued in GRBL's planner buffer
+        rx: Number of characters queued in GRBL's serial RX buffer
         homing: Current homing operation status (OFF, QUEUED, or RUNNING)
     """
-    _status: str = GrblDeviceStatus.DISCONNECTED.value
+    state: str = "Unknown"
+    mpos: tuple[float, float, float] = field(default_factory=lambda: (0.0, 0.0, 0.0))
+    wpos: tuple[float, float, float] = field(default_factory=lambda: (0.0, 0.0, 0.0))
+    buf: int = 0
+    rx: int = 0
     homing: HomingStatus = field(default_factory=lambda: HomingStatus.OFF)
 
     @classmethod
-    def parse_state_str(cls, line: str) -> str:
+    def parse(cls, line: str) -> "GrblDeviceState | None":
         """
         Parse a GRBL status report line.
 
-        Supports both pipe and comma delimiters:
-        <Idle|MPos:3.000,3.000,0.000|FS:0,0>
-        <Idle,MPos:0.000,0.000,0.000,WPos:0.000,0.000,0.000>
+        Expected format: <Idle,MPos:0.000,0.000,0.000,WPos:0.000,0.000,0.000,Buf:0,RX:0>
 
         Args:
             line: The status report line from the device.
@@ -94,6 +100,82 @@ class GrblDeviceState:
         # Status report must be enclosed in angle brackets
         if not line.startswith("<") or not line.endswith(">"):
             return None
+
+        # Remove brackets
+        content = line[1:-1]
+
+        # Split by comma, but be careful with coordinates
+        parts = content.split(",")
+        if len(parts) < 1:
+            return None
+
+        state = parts[0]
+        mpos = (0.0, 0.0, 0.0)
+        wpos = (0.0, 0.0, 0.0)
+        buf = 0
+        rx = 0
+
+        # Parse remaining parts - handle MPos and WPos with their coordinates
+        i = 1
+        while i < len(parts):
+            part = parts[i].strip()
+
+            if part.startswith("MPos:"):
+                # MPos:x,y,z - x is in current part, y and z in next 2 parts
+                try:
+                    x = float(part[5:])
+                    y = float(parts[i + 1].strip()) if i + 1 < len(parts) else 0.0
+                    z = float(parts[i + 2].strip()) if i + 2 < len(parts) else 0.0
+                    mpos = (x, y, z)
+                    i += 2  # Skip the next 2 parts we just processed
+                except (ValueError, IndexError):
+                    pass
+
+            elif part.startswith("WPos:"):
+                # WPos:x,y,z - x is in current part, y and z in next 2 parts
+                try:
+                    x = float(part[5:])
+                    y = float(parts[i + 1].strip()) if i + 1 < len(parts) else 0.0
+                    z = float(parts[i + 2].strip()) if i + 2 < len(parts) else 0.0
+                    wpos = (x, y, z)
+                    i += 2  # Skip the next 2 parts we just processed
+                except (ValueError, IndexError):
+                    pass
+
+            elif part.startswith("Buf:"):
+                try:
+                    buf = int(part[4:])
+                except ValueError:
+                    pass
+
+            elif part.startswith("RX:"):
+                try:
+                    rx = int(part[3:])
+                except ValueError:
+                    pass
+
+            i += 1
+
+        return cls(state=state, mpos=mpos, wpos=wpos, buf=buf, rx=rx)
+
+    @classmethod
+    def parse_state_str(cls, line: str) -> str:
+        """
+        Parse a GRBL status report line and extract just the state.
+
+        Supports both pipe and comma delimiters:
+        <Idle|MPos:3.000,3.000,0.000|FS:0,0>
+        <Idle,MPos:0.000,0.000,0.000,WPos:0.000,0.000,0.000>
+
+        Args:
+            line: The status report line from the device.
+
+        Returns:
+            Status state string if parsing succeeds, "Unknown" otherwise.
+        """
+        # Status report must be enclosed in angle brackets
+        if not line.startswith("<") or not line.endswith(">"):
+            return GrblDeviceStatus.UNKNOWN.value
 
         # Remove brackets
         content = line[1:-1]
@@ -117,11 +199,11 @@ class GrblDeviceState:
 
     @property
     def status(self) -> str:
-        return self._status
+        return self.state
 
     @status.setter
     def status(self, status: GrblDeviceStatus) -> None:
-        self._status = status.value
+        self.state = status.value
 
     def update_status(self, line: str) -> None:
         """
@@ -131,4 +213,4 @@ class GrblDeviceState:
             line: The status report line from the device.
         """
         parsed_state = GrblDeviceState.parse_state_str(line)
-        self._status = parsed_state
+        self.state = parsed_state
