@@ -296,6 +296,8 @@ class GCodeServer:
             )
             tasks_to_queue = [task]
 
+        logger.verbose(f"Built tasks for command: {command}: {repr(tasks_to_queue)}")
+
         # Queue all tasks for processing
         for task in tasks_to_queue:
             await self.device.do_task(task)

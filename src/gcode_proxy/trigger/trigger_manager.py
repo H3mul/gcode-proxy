@@ -10,6 +10,7 @@ from collections.abc import Sequence
 import threading
 
 from gcode_proxy.core.logging import get_logger
+from gcode_proxy.device.grbl_device_status import GrblDeviceStatus
 from .trigger import Trigger, StateTrigger
 from .triggers_config import (
     CustomTriggerConfig,
@@ -18,7 +19,6 @@ from .triggers_config import (
     TriggerBehavior,
 )
 from gcode_proxy.core.task import GCodeTask, Task, ShellTask
-from gcode_proxy.device.grbl_device_status import GrblDeviceStatus
 
 logger = get_logger()
 
@@ -60,7 +60,8 @@ class TriggerManager:
     # Maps trigger ID to pending task for state triggers
     _pending_state_triggers: dict[str, asyncio.Task] = {}
     # Current device state for state-restricted gcode triggers
-    _current_device_state: str | None = None
+    # Initialized to DISCONNECTED, for beginning of operation
+    _current_device_state: str | None = GrblDeviceStatus.DISCONNECTED.value
 
     def __new__(cls) -> "TriggerManager":
         """

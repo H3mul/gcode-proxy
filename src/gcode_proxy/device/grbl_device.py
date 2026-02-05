@@ -29,10 +29,6 @@ DEFAULT_GRBL_BUFFER_SIZE = 128  # bytes
 DEFAULT_LIVENESS_PERIOD = 1000  # ms
 CONFIRMATION_DELIVERY_GRACE_PERIOD = 200  # ms
 
-
-
-
-
 class GrblDevice(GCodeDevice):
     """
     GCode device that communicates with USB serial GRBL devices.
