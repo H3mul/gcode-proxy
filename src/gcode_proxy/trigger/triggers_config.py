@@ -58,7 +58,8 @@ class GCodeTriggerConfig:
         """Create a GCodeTriggerConfig from a dictionary.
 
         Args:
-            data: Dictionary containing 'type', 'match', 'behavior', 'synchronize', and optional 'state' keys.
+            data: Dictionary containing 'type', 'match', 'behavior', 'synchronize', and optional
+            'state' keys.
 
         Returns:
             GCodeTriggerConfig instance.

@@ -7,8 +7,6 @@ counting protocol to manage device buffer quota and handles real-time commands.
 """
 
 import asyncio
-from enum import Enum
-
 import serial_asyncio
 
 from gcode_proxy.core.connection_manager import ConnectionManager
@@ -32,22 +30,7 @@ DEFAULT_LIVENESS_PERIOD = 1000  # ms
 CONFIRMATION_DELIVERY_GRACE_PERIOD = 200  # ms
 
 
-class StatusBehavior(Enum):
-    """Enumeration for status query behavior modes."""
 
-    LIVENESS_CACHE = "liveness-cache"
-    """
-    Cache status from internal probes.
-    Proxy periodically sends ? to device and caches responses.
-    Client queries are served from cache.
-    """
-
-    FORWARD = "forward"
-    """
-    Forward status queries directly to device.
-    Each client ? is sent to device, response returned to client.
-    Always provides fresh device state.
-    """
 
 
 class GrblDevice(GCodeDevice):
@@ -66,13 +49,11 @@ class GrblDevice(GCodeDevice):
         dev_path: str | None = None,
         baud_rate: int = 115200,
         queue_size: int = 50,
-        read_buffer_size: int = 4096,
         initialization_delay: float = 100.0,  # ms
         grbl_buffer_size: int = DEFAULT_GRBL_BUFFER_SIZE,
         liveness_period: float = DEFAULT_LIVENESS_PERIOD,  # ms
         swallow_realtime_ok: bool = True,
         device_discovery_poll_interval: float = 1000,  # ms
-        status_behavior: StatusBehavior | str = StatusBehavior.FORWARD,
     ):
         """
         Initialize the GRBL serial device.
@@ -82,20 +63,13 @@ class GrblDevice(GCodeDevice):
             dev_path: Device path like /dev/ttyACM0 (mutually exclusive with usb_id).
             baud_rate: Serial baud rate for communication.
             queue_size: Maximum number of commands allowed in the queue.
-            read_buffer_size: Size of the read buffer for serial communication.
             initialization_delay: Delay in ms to allow device initialization after connection.
             grbl_buffer_size: Maximum characters allowed in device buffer (default: 128).
             liveness_period: Period in ms for pinging device with `?` command (default: 1000ms).
                 Set to 0 to disable liveness probing.
             swallow_realtime_ok: Suppress 'ok' responses from `?` commands (default: True).
-            device_discovery_timeout: Maximum time to wait for device to appear.
-                None means wait forever (default: None).
             device_discovery_poll_interval: Time between device discovery polls
                 (default: 1000 ms).
-            status_behavior: How to handle status queries (StatusBehavior enum or str).
-                StatusBehavior.LIVENESS_CACHE: Cache status from internal probes.
-                StatusBehavior.FORWARD: Forward queries directly to device.
-                (default: StatusBehavior.FORWARD)
 
         Raises:
             ValueError: If neither usb_id nor dev_path are provided
@@ -110,7 +84,6 @@ class GrblDevice(GCodeDevice):
         self.usb_id = usb_id
         self.dev_path = dev_path
         self.baud_rate = baud_rate
-        self.read_buffer_size = read_buffer_size
         self.initialization_delay = initialization_delay / 1000
         self.grbl_buffer_size = grbl_buffer_size
         self.liveness_period = liveness_period / 1000
@@ -118,11 +91,6 @@ class GrblDevice(GCodeDevice):
 
         self.buffer_paused: bool = False
 
-        # Convert string to enum if needed
-        if isinstance(status_behavior, str):
-            self.status_behavior = StatusBehavior(status_behavior)
-        else:
-            self.status_behavior = status_behavior
         self.device_discovery_poll_interval = device_discovery_poll_interval / 1000
 
         self._protocol: GCodeSerialProtocol | None = None

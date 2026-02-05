@@ -13,7 +13,7 @@ This package provides:
 
 from .device import GCodeDevice
 from .dry_run_device import DryRunDevice
-from .grbl_device import GrblDevice, StatusBehavior
+from .grbl_device import GrblDevice
 from .grbl_device_status import GrblDeviceStatus, GrblDeviceState
 from .interface import GCodeSerialProtocol
 
@@ -21,7 +21,6 @@ __all__ = [
     "GCodeDevice",
     "DryRunDevice",
     "GrblDevice",
-    "StatusBehavior",
     "GrblDeviceStatus",
     "GrblDeviceState",
     "GCodeSerialProtocol",

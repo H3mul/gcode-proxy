@@ -1,5 +1,7 @@
 # GCode Proxy Server
 
+> **Note:** This project is still a work in progress.
+
 A high-performance GCode proxy server that acts as a middleman between GCode stream sources and USB serial devices. Built with asyncio for maximum responsiveness.
 
 ## Features
@@ -12,27 +14,24 @@ A high-performance GCode proxy server that acts as a middleman between GCode str
 
 ## Installation
 
-### From PyPI (when published)
-
-```bash
-pip install gcode-proxy
-```
-
 ### From Source
 
-```bash
-git clone https://github.com/example/gcode-proxy.git
-cd gcode-proxy
-pip install -e .
-```
-
-### System-wide Installation
+Install the `gcode-proxy-server` command globally:
 
 ```bash
-pip install .
+pip install https://github.com/H3mul/gcode-proxy.git
 ```
 
-This installs the `gcode-proxy-server` command globally.
+Install in a locally editable package:
+```bash
+pip install -e https://github.com/H3mul/gcode-proxy.git
+```
+
+### Deployment Reference
+
+An example of how this project is deployed using Ansible can be found here:
+[Ansible Deployment Playbook](https://github.com/H3mul/ansible-collections/blob/80674c596fb515b544ad49f0d885c90ae7fc59cd/common/playbooks/falcon/playbook.yaml)
+
 
 ## Quick Start
 
@@ -77,12 +76,19 @@ device:
 ### Environment Variables
 
 | Variable | Description | Default |
-|----------|-------------|---------|
+|---|---|---|
 | `GCODE_PROXY_CONFIG` | Path to config file | `~/.config/gcode-proxy/config.yaml` |
 | `SERVER_PORT` | TCP server port | `8080` |
 | `SERVER_ADDRESS` | TCP server bind address | `0.0.0.0` |
-| `DEVICE_USB_ID` | USB device ID (vendor:product) | `303a:4001` |
+| `SERVER_QUEUE_LIMIT` | Command queue size limit | `50` |
+| `DEVICE_USB_ID` | USB device ID (vendor:product) | `None` |
+| `DEVICE_DEV_PATH` | Device path (e.g., /dev/ttyACM0) | `None` |
 | `DEVICE_BAUD_RATE` | Serial baud rate | `115200` |
+| `DEVICE_SERIAL_DELAY` | Device initialization delay in ms | `100` |
+| `DEVICE_LIVENESS_PERIOD` | Period in ms for pinging device with `?` | `1000` |
+| `DEVICE_SWALLOW_REALTIME_OK` | Suppress 'ok' from `?` commands | `True` |
+| `GCODE_LOG_FILE` | Path to GCode log file | `None` |
+| `TCP_LOG_FILE` | Path to TCP log file | `None` |
 
 ### CLI Arguments
 
@@ -90,16 +96,33 @@ device:
 Usage: gcode-proxy-server [OPTIONS]
 
 Options:
-  -c, --config PATH       Path to configuration file
-  -p, --port INTEGER      TCP server port
-  -a, --address TEXT      TCP server bind address
-  -d, --device TEXT       USB device ID (vendor:product format)
-  -b, --baud-rate INTEGER Serial baud rate
-  -v, --verbose           Enable verbose (debug) logging
-  -q, --quiet             Suppress all output except errors
-  --generate-config       Generate a default configuration file
-  --version               Show version and exit
-  --help                  Show this message and exit
+  -c, --config PATH             Path to configuration file.
+  -p, --port INTEGER            TCP server port.
+  -a, --address TEXT            TCP server bind address.
+  --queue-limit INTEGER         Command queue size limit (default: 50).
+  -d, --device, --usb-id TEXT   USB device ID in vendor:product format (e.g.,
+                                303a:4001).
+  --dev TEXT                    Device path (e.g., /dev/ttyACM0). Mutually
+                                exclusive with --usb-id.
+  -b, --baud-rate INTEGER       Serial baud rate.
+  --serial-delay FLOAT          Device initialization delay in ms.
+  --liveness-period FLOAT       Period in ms for pinging device with `?`
+                                command (default: 1000ms).
+  --swallow-realtime-ok BOOLEAN
+                                Suppress 'ok' responses from `?` commands to
+                                avoid buffer conflicts (default: true).
+  --gcode-log-file PATH         Path to file for logging all GCode
+                                communication.
+  --tcp-log-file PATH           Path to file for logging all TCP
+                                communication.
+  --dry-run                     Run in dry-run mode without actual serial
+                                device communication.
+  -v, --verbose                 Increase verbosity level (-v for DEBUG, -vv for
+                                VERBOSE).
+  -q, --quiet                   Suppress all output except errors.
+  --generate-config             Generate a default configuration file and exit.
+  --version                     Show the version and exit.
+  --help                        Show this message and exit.
 ```
 
 ## Usage Examples
@@ -133,7 +156,7 @@ async def main():
         address="0.0.0.0",
         port=8080,
     )
-    
+
     async with service:
         # Service is now running
         await asyncio.sleep(3600)  # Run for 1 hour
@@ -153,7 +176,7 @@ class MyGCodeHandler(GCodeHandler):
         print(f"Received from {client_address}: {gcode}")
         # Modify or pass through the gcode
         return gcode
-    
+
     async def on_gcode_sent(self, gcode: str, client_address: tuple[str, int]) -> None:
         print(f"Sent to device: {gcode}")
 
@@ -163,7 +186,7 @@ class MyResponseHandler(ResponseHandler):
     ) -> str:
         print(f"Device responded: {response}")
         return response
-    
+
     async def on_response_sent(self, response: str, client_address: tuple[str, int]) -> None:
         print(f"Sent response to client: {response}")
 

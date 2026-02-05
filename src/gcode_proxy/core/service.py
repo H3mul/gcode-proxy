@@ -67,7 +67,6 @@ class GCodeProxyService:
         queue_limit: int = 50,
         liveness_period: float = 1000.0,
         swallow_realtime_ok: bool = True,
-        status_behavior: str = "forward",
     ) -> "GCodeProxyService":
         """
         Create a proxy service with a serial GRBL device.
@@ -86,7 +85,6 @@ class GCodeProxyService:
             queue_limit: Maximum size of the command queue (default: 50).
             liveness_period: Period in ms for pinging device with `?` command.
             swallow_realtime_ok: Suppress 'ok' responses from `?` commands.
-            status_behavior: Status query behavior ('liveness-cache' or 'forward').
 
         Returns:
             A configured GCodeProxyService instance.
@@ -103,7 +101,6 @@ class GCodeProxyService:
             initialization_delay=serial_delay,
             liveness_period=liveness_period,
             swallow_realtime_ok=swallow_realtime_ok,
-            status_behavior=status_behavior,
         )
         return cls(
             device=device,

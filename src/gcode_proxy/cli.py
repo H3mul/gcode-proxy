@@ -22,9 +22,7 @@ from gcode_proxy.core.config import (
     ENV_DEVICE_BAUD_RATE,
     ENV_DEVICE_DEV_PATH,
     ENV_DEVICE_LIVENESS_PERIOD,
-    ENV_DEVICE_RESPONSE_TIMEOUT,
     ENV_DEVICE_SERIAL_DELAY,
-    ENV_DEVICE_STATUS_BEHAVIOR,
     ENV_DEVICE_SWALLOW_REALTIME_OK,
     ENV_DEVICE_USB_ID,
     ENV_GCODE_LOG_FILE,
@@ -96,20 +94,11 @@ from gcode_proxy.trigger import TriggerManager
     help=f"Device initialization delay in ms. [env: {ENV_DEVICE_SERIAL_DELAY}]",
 )
 @click.option(
-    "--response-timeout",
-    type=float,
-    default=None,
-    help=(
-        f"Timeout in ms for waiting for device response (default: 30s). "
-        f"[env: {ENV_DEVICE_RESPONSE_TIMEOUT}]"
-    ),
-)
-@click.option(
     "--liveness-period",
     type=float,
     default=None,
     help=(
-        f"Period in ms for pinging device with `?` command (default: 200ms). "
+        f"Period in ms for pinging device with `?` command (default: 1000ms). "
         f"[env: {ENV_DEVICE_LIVENESS_PERIOD}]"
     ),
 )
@@ -120,15 +109,6 @@ from gcode_proxy.trigger import TriggerManager
     help=(
         f"Suppress 'ok' responses from `?` commands to avoid buffer conflicts "
         f"(default: true). [env: {ENV_DEVICE_SWALLOW_REALTIME_OK}]"
-    ),
-)
-@click.option(
-    "--status-behavior",
-    type=str,
-    default=None,
-    help=(
-        f"Status query behavior: 'liveness-cache' or 'forward'. "
-        f"[env: {ENV_DEVICE_STATUS_BEHAVIOR}]"
     ),
 )
 @click.option(
@@ -177,10 +157,8 @@ def main(
     dev_path: str | None,
     baud_rate: int | None,
     serial_delay: float | None,
-    response_timeout: float | None,
     liveness_period: float | None,
     swallow_realtime_ok: bool | None,
-    status_behavior: str | None,
     gcode_log_file: Path | None,
     tcp_log_file: Path | None,
     dry_run: bool,
@@ -241,17 +219,11 @@ def main(
     if serial_delay is not None:
         cli_args["serial_delay"] = serial_delay
 
-    if response_timeout is not None:
-        cli_args["response_timeout"] = response_timeout
-
     if liveness_period is not None:
         cli_args["liveness_period"] = liveness_period
 
     if swallow_realtime_ok is not None:
         cli_args["swallow_realtime_ok"] = swallow_realtime_ok
-
-    if status_behavior is not None:
-        cli_args["status_behavior"] = status_behavior
 
     if gcode_log_file is not None:
         cli_args["gcode_log_file"] = str(gcode_log_file)
@@ -297,7 +269,6 @@ def main(
         device_info = config.device.path if config.device.path else config.device.usb_id
         logger.info(f"  Device: {device_info} @ {config.device.baud_rate} baud")
         logger.info(f"  Serial delay: {config.device.serial_delay}ms")
-        logger.info(f"  Response timeout: {config.device.response_timeout}ms")
         logger.info(f"  Liveness period: {config.device.liveness_period}ms")
         logger.info(f"  Swallow realtime ok: {config.device.swallow_realtime_ok}")
     logger.info(f"  Server: {config.server.address}:{config.server.port}")
@@ -340,7 +311,6 @@ def main(
             queue_limit=config.server.queue_limit,
             liveness_period=config.device.liveness_period,
             swallow_realtime_ok=config.device.swallow_realtime_ok,
-            status_behavior=config.device.status_behavior,
         )
 
     # Set up signal handlers for graceful shutdown

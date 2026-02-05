@@ -11,7 +11,12 @@ import threading
 
 from gcode_proxy.core.logging import get_logger
 from .trigger import Trigger, StateTrigger
-from .triggers_config import CustomTriggerConfig, GCodeTriggerConfig, StateTriggerConfig, TriggerBehavior
+from .triggers_config import (
+    CustomTriggerConfig,
+    GCodeTriggerConfig,
+    StateTriggerConfig,
+    TriggerBehavior,
+)
 from gcode_proxy.core.task import GCodeTask, Task, ShellTask
 from gcode_proxy.device.grbl_device_status import GrblDeviceStatus
 

@@ -48,10 +48,7 @@ device:
   # Environment variable: DEVICE_SERIAL_DELAY
   serial-delay: 100 #ms
 
-  # Timeout in ms for waiting for device response
-  # Increase this value if your device needs more time to respond to commands
-  # Environment variable: DEVICE_RESPONSE_TIMEOUT
-  response-timeout: 120000.0 #ms
+
 
   # Period in ms for pinging device with `?` command
   # The `?` command requests a status report from the device, allowing the proxy
@@ -69,24 +66,7 @@ device:
   # Environment variable: DEVICE_SWALLOW_REALTIME_OK
   swallow-realtime-ok: true
 
-  # Status query behavior mode
-  # Determines how the proxy handles status queries (?) from clients
-  #
-  # Modes:
-  #   liveness-cache:
-  #     - Proxy maintains internal status cache from periodic device probes (at `liveness-period` intervals)
-  #     - Client status queries are served immediately from cache
-  #     - Faster response times, predictable status update intervals
-  #     - Good for high-throughput scenarios
-  #
-  #   forward (default):
-  #     - Client status queries are forwarded directly to the device
-  #     - Always provides fresh, real-time device state
-  #     - Slightly higher latency due to device communication
-  #     - Good for accuracy-critical or low-throughput scenarios
-  #
-  # Environment variable: DEVICE_STATUS_BEHAVIOR
-  status-behavior: forward
+
 
 
 # GCode communication log file

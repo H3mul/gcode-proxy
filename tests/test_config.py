@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from src.gcode_proxy.config import (
+from src.gcode_proxy.core.config import (
     Config,
     DeviceConfig,
     ServerConfig,
@@ -17,7 +17,7 @@ from src.gcode_proxy.config import (
     ENV_SERVER_ADDRESS,
     ENV_SERVER_PORT,
 )
-from src.gcode_proxy.triggers_config import CustomTriggerConfig, GCodeTriggerConfig
+from src.gcode_proxy.trigger.triggers_config import CustomTriggerConfig, GCodeTriggerConfig
 
 
 class TestServerConfig:
@@ -84,7 +84,9 @@ class TestConfig:
                 "usb_id": "303a:4001",
                 "path": None,
                 "baud_rate": 115200,
-                "serial_delay": 0.1,
+                "serial_delay": 100,
+                "liveness_period": 1000.0,
+                "swallow_realtime_ok": True,
             },
         }
 
@@ -103,7 +105,9 @@ class TestConfig:
                 "usb_id": None,
                 "path": "/dev/ttyACM0",
                 "baud_rate": 115200,
-                "serial_delay": 0.1,
+                "serial_delay": 100,
+                "liveness_period": 1000.0,
+                "swallow_realtime_ok": True,
             },
         }
 
