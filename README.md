@@ -4,13 +4,37 @@
 
 A high-performance GCode proxy server that acts as a middleman between GCode stream sources and USB serial devices. Built with asyncio for maximum responsiveness.
 
+## Use Cases
+
+- Live control of GRBL devices over the network (Currently focusing on Lightburn and Creality Falcon laser)
+- Extend GRBL device functionality with easily manageable custom triggers
+    A few examples from [config.example.yaml](./config.example.yaml):
+    - Idle power off/on
+    - Add air assist and air vent activation on gcode commands (eg using smart plugs and Home Assistant API)
+    - Send notifications on job completion (eg using Pushbullet API)
+
+```yaml
+  # Example: Air assist on (M8 command)
+  - id: air-assist-on
+    trigger:
+      type: gcode
+      match: M8
+    command: "hass-cli service call homeassistant.turn_on --arguments entity_id=switch.laser_air_assist"
+```
+
+Design your user flow automation as you desire!
+- Open Lightburn (this powers on the laser and connects to it automatically)
+- Start a job (automatically turns on air assist and air ventilation)
+- Job completes (automatically turns off air assist and air ventilation, sends a notification to your phone)
+- After 5 minutes of idle, the laser powers off automatically
+
 ## Features
 
+- **Extensible Triggers**: Easily add custom commands to be executed in response to GCode command occurrence and device state changes
 - **TCP Server**: Accept GCode commands over TCP from any network client
 - **USB Serial Communication**: Forward commands to USB devices (3D printers, CNC machines, etc.)
 - **Async/Non-blocking**: Built on asyncio for responsive operation
 - **Flexible Configuration**: Configure via environment variables, CLI arguments, config files, or defaults
-- **Extensible Handlers**: Hook into GCode and response processing for custom actions
 
 ## Installation
 
@@ -124,6 +148,18 @@ Options:
   --help                        Show this message and exit.
 ```
 
+### Lightburn Configuration
+
+To configure Lightburn to use the GCode Proxy Server:
+
+1. Go to `Devices` > `Create Manually`
+2. Select a `GRBL` device
+3. Set connection to Ethernet/TCP
+4. Insert Hostname/IP of the server host
+5. Finish wizard
+6. Open `Laser Tools` > `Device Settings`
+7. in `Basic Settings`, set `Port` to the port used by GCode Proxy Server (default: `8080`)
+
 ## Usage Examples
 
 ### Basic Usage
@@ -140,61 +176,6 @@ SERVER_PORT=9000 DEVICE_USB_ID=303a:4001 gcode-proxy-server
 
 # Verbose output for debugging
 gcode-proxy-server --verbose
-```
-
-### Using as a Library
-
-```python
-import asyncio
-from gcode_proxy import GCodeProxyService
-
-async def main():
-    service = GCodeProxyService(
-        usb_id="303a:4001",
-        baud_rate=115200,
-        address="0.0.0.0",
-        port=8080,
-    )
-
-    async with service:
-        # Service is now running
-        await asyncio.sleep(3600)  # Run for 1 hour
-
-asyncio.run(main())
-```
-
-### Custom Handlers
-
-The proxy supports custom handlers for processing GCode commands and responses:
-
-```python
-from gcode_proxy import GCodeProxy, GCodeHandler, ResponseHandler
-
-class MyGCodeHandler(GCodeHandler):
-    async def on_gcode_received(self, gcode: str, client_address: tuple[str, int]) -> str:
-        print(f"Received from {client_address}: {gcode}")
-        # Modify or pass through the gcode
-        return gcode
-
-    async def on_gcode_sent(self, gcode: str, client_address: tuple[str, int]) -> None:
-        print(f"Sent to device: {gcode}")
-
-class MyResponseHandler(ResponseHandler):
-    async def on_response_received(
-        self, response: str, original_gcode: str, client_address: tuple[str, int]
-    ) -> str:
-        print(f"Device responded: {response}")
-        return response
-
-    async def on_response_sent(self, response: str, client_address: tuple[str, int]) -> None:
-        print(f"Sent response to client: {response}")
-
-# Use with proxy
-proxy = GCodeProxy(
-    usb_id="303a:4001",
-    gcode_handler=MyGCodeHandler(),
-    response_handler=MyResponseHandler(),
-)
 ```
 
 ## Finding Your USB Device ID
@@ -226,7 +207,9 @@ system_profiler SPUSBDataType
 ```bash
 git clone https://github.com/example/gcode-proxy.git
 cd gcode-proxy
-pip install -e ".[dev]"
+uv venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
 ```
 
 ### Running Tests
@@ -247,19 +230,7 @@ mypy src/
 
 ## Architecture
 
-```
-gcode-proxy/
-├── src/gcode_proxy/
-│   ├── __init__.py      # Package exports
-│   ├── cli.py           # Command-line interface (Click)
-│   ├── config.py        # Configuration management
-│   ├── core.py          # GCodeProxy - serial communication
-│   ├── handlers.py      # Extensible handler interfaces
-│   └── server.py        # TCP server implementation
-├── tests/               # Test suite
-├── pyproject.toml       # Project configuration
-└── README.md
-```
+![Architecture Diagram](./docs/arch.svg)
 
 ## License
 

@@ -48,8 +48,6 @@ device:
   # Environment variable: DEVICE_SERIAL_DELAY
   serial-delay: 100 #ms
 
-
-
   # Period in ms for pinging device with `?` command
   # The `?` command requests a status report from the device, allowing the proxy
   # to track device state (machine position, work position, buffer status, etc.).
@@ -65,9 +63,6 @@ device:
   # these responses, or if you need the status request 'ok' responses for other reasons.
   # Environment variable: DEVICE_SWALLOW_REALTIME_OK
   swallow-realtime-ok: true
-
-
-
 
 # GCode communication log file
 # Optional path to a file where all GCode commands sent to the device
