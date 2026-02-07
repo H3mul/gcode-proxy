@@ -538,6 +538,7 @@ class GrblDevice(GCodeDevice):
 
         elif line.startswith("<"):
             await self._handle_state_update(line)
+            await self._respond_to_client(line)
 
         elif line.startswith("["):
             await self._broadcast_data_to_clients(line)
