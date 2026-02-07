@@ -77,89 +77,17 @@ class GrblDeviceState:
         rx: Number of characters queued in GRBL's serial RX buffer
         homing: Current homing operation status (OFF, QUEUED, or RUNNING)
     """
-    state: str = "Unknown"
-    mpos: tuple[float, float, float] = field(default_factory=lambda: (0.0, 0.0, 0.0))
-    wpos: tuple[float, float, float] = field(default_factory=lambda: (0.0, 0.0, 0.0))
-    buf: int = 0
-    rx: int = 0
+
+    # Internal field storage
+    status: str = GrblDeviceStatus.DISCONNECTED.value
+
+    def set_status(self, value: GrblDeviceStatus) -> None:
+        self._status = value.value
+
     homing: HomingStatus = field(default_factory=lambda: HomingStatus.OFF)
 
     @classmethod
-    def parse(cls, line: str) -> "GrblDeviceState | None":
-        """
-        Parse a GRBL status report line.
-
-        Expected format: <Idle,MPos:0.000,0.000,0.000,WPos:0.000,0.000,0.000,Buf:0,RX:0>
-
-        Args:
-            line: The status report line from the device.
-
-        Returns:
-            GrblDeviceState instance if parsing succeeds, None otherwise.
-        """
-        # Status report must be enclosed in angle brackets
-        if not line.startswith("<") or not line.endswith(">"):
-            return None
-
-        # Remove brackets
-        content = line[1:-1]
-
-        # Split by comma, but be careful with coordinates
-        parts = content.split(",")
-        if len(parts) < 1:
-            return None
-
-        state = parts[0]
-        mpos = (0.0, 0.0, 0.0)
-        wpos = (0.0, 0.0, 0.0)
-        buf = 0
-        rx = 0
-
-        # Parse remaining parts - handle MPos and WPos with their coordinates
-        i = 1
-        while i < len(parts):
-            part = parts[i].strip()
-
-            if part.startswith("MPos:"):
-                # MPos:x,y,z - x is in current part, y and z in next 2 parts
-                try:
-                    x = float(part[5:])
-                    y = float(parts[i + 1].strip()) if i + 1 < len(parts) else 0.0
-                    z = float(parts[i + 2].strip()) if i + 2 < len(parts) else 0.0
-                    mpos = (x, y, z)
-                    i += 2  # Skip the next 2 parts we just processed
-                except (ValueError, IndexError):
-                    pass
-
-            elif part.startswith("WPos:"):
-                # WPos:x,y,z - x is in current part, y and z in next 2 parts
-                try:
-                    x = float(part[5:])
-                    y = float(parts[i + 1].strip()) if i + 1 < len(parts) else 0.0
-                    z = float(parts[i + 2].strip()) if i + 2 < len(parts) else 0.0
-                    wpos = (x, y, z)
-                    i += 2  # Skip the next 2 parts we just processed
-                except (ValueError, IndexError):
-                    pass
-
-            elif part.startswith("Buf:"):
-                try:
-                    buf = int(part[4:])
-                except ValueError:
-                    pass
-
-            elif part.startswith("RX:"):
-                try:
-                    rx = int(part[3:])
-                except ValueError:
-                    pass
-
-            i += 1
-
-        return cls(state=state, mpos=mpos, wpos=wpos, buf=buf, rx=rx)
-
-    @classmethod
-    def parse_state_str(cls, line: str) -> str:
+    def parse_status_str(cls, line: str) -> str:
         """
         Parse a GRBL status report line and extract just the state.
 
@@ -195,22 +123,13 @@ class GrblDeviceState:
         Args:
             line: The status report line from the device.
         """
-        return cls(state=cls.parse_state_str(line))
+        return cls(status=cls.parse_status_str(line))
 
-    @property
-    def status(self) -> str:
-        return self.state
-
-    @status.setter
-    def status(self, status: GrblDeviceStatus) -> None:
-        self.state = status.value
-
-    def update_status(self, line: str) -> None:
+    def update_from_status_report(self, line: str) -> None:
         """
         Update the device state based on a GRBL status report line.
 
         Args:
             line: The status report line from the device.
         """
-        parsed_state = GrblDeviceState.parse_state_str(line)
-        self.state = parsed_state
+        self.status = GrblDeviceState.parse_status_str(line)

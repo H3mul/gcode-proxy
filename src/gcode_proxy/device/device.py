@@ -9,7 +9,7 @@ Subclasses should implement actual hardware communication or dry-run logic.
 """
 
 from gcode_proxy.core.logging import get_logger
-from gcode_proxy.core.task import create_task_queue, Task
+from gcode_proxy.core.task import create_task_queue, Task, empty_queue
 
 logger = get_logger()
 
@@ -53,7 +53,6 @@ class GCodeDevice:
 
     def clear_queue(self) -> None:
         """Clear all pending tasks from the queue."""
-        from gcode_proxy.core.task import empty_queue
         empty_queue(self.task_queue)
 
     def queue_size(self) -> int:

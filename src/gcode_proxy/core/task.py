@@ -82,6 +82,7 @@ class ShellTask(Task):
     Attributes:
         id: Identifier for the task.
         command: The shell command string to execute.
+        wait_for_idle: Force the device to sync and then wait for the buffer to drain and idle state
     """
 
     id: str = ""
@@ -146,7 +147,7 @@ def create_task_queue(maxsize: int = 0) -> TaskQueue:
     """
     return asyncio.Queue(maxsize=maxsize)
 
-def empty_queue(q: TaskQueue):
+def empty_queue(q: asyncio.Queue):
     while not q.empty():
         try:
             q.get_nowait()

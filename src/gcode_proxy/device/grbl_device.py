@@ -7,11 +7,12 @@ counting protocol to manage device buffer quota and handles real-time commands.
 """
 
 import asyncio
+from tokenize import ASYNC
 import serial_asyncio
 
 from gcode_proxy.core.connection_manager import ConnectionManager
 from gcode_proxy.core.logging import get_logger
-from gcode_proxy.core.task import GCodeTask, ShellTask, Task
+from gcode_proxy.core.task import GCodeTask, ShellTask, Task, empty_queue
 from gcode_proxy.core.utils import (
     SerialConnectionError,
     is_immediate_grbl_command,
@@ -77,6 +78,7 @@ class GrblDevice(GCodeDevice):
             queue_size=queue_size,
         )
 
+        # Parameters
         self.usb_id = usb_id
         self.dev_path = dev_path
         self.baud_rate = baud_rate
@@ -84,34 +86,30 @@ class GrblDevice(GCodeDevice):
         self.grbl_buffer_size = grbl_buffer_size
         self.liveness_period = liveness_period / 1000
         self.swallow_realtime_ok = swallow_realtime_ok
+        self.device_discovery_poll_interval: float = device_discovery_poll_interval / 1000
 
-        self.buffer_paused: bool = False
-
-        self.device_discovery_poll_interval = device_discovery_poll_interval / 1000
-
+        # Runtime state
         self._protocol: GCodeSerialProtocol | None = None
-        self._response_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._response_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=MAX_RESPONSE_QUEUE_SIZE)
 
-        # Buffer quota tracking
+        self._buffer_paused: bool = False
         self._buffer_quota = grbl_buffer_size
         self._in_flight_queue: list[Task] = []
 
-        # Device state tracking
+        # Tasks are being processed
         self._running: bool = False
+        # Device is connected via serial and be communicated to
+        self._connected: bool = False
+
         self._device_state: GrblDeviceState | None = GrblDeviceState()
         self._liveness_task: asyncio.Task | None = None
         self._wait_for_device_task: asyncio.Task | None = None
         self._skippable_oks: int = 0
 
-        # Flow control for Hold state - allows pausing/resuming task processing
-        self._resume_event = asyncio.Event()
+        self._resume_event: asyncio.Event = asyncio.Event()
         self._resume_event.set()  # Start in "resumed" state
 
-        # Set initial device state in trigger manager
-        self._device_state.status = GrblDeviceStatus.DISCONNECTED
-
-        # Disconnect event for handling reconnection
-        self._disconnect_event = asyncio.Event()
+        self._disconnect_event: asyncio.Event = asyncio.Event()
         self._reconnect_task: asyncio.Task | None = None
 
     @property
@@ -123,6 +121,33 @@ class GrblDevice(GCodeDevice):
     def device_state(self) -> GrblDeviceState | None:
         """Get the current device state from the latest status report."""
         return self._device_state
+
+    async def _reset_running_state(self) -> None:
+        """
+        Clear device state and all queues.
+
+        Resets buffer quota, clears in-flight and task queues, resets state,
+        and clears the ok swallowing counter. Called during device connection
+        and when the device restarts (ALARM or Grbl response, or receiving 0x18 command).
+        """
+        logger.debug("Resetting device state and queues")
+
+        # Clear the queues
+        self._in_flight_queue = []
+        empty_queue(self.task_queue)
+        empty_queue(self._response_queue)
+
+        self._buffer_quota = self.grbl_buffer_size
+        self._skippable_oks = 0
+
+        # Reset resume event (allow processing to continue)
+        self._resume_event = asyncio.Event()
+        self._resume_event.set()
+
+        # Release buffer pause
+        self._buffer_paused = False
+
+        logger.debug("Device state init complete")
 
     async def connect(self) -> None:
         """
@@ -139,6 +164,7 @@ class GrblDevice(GCodeDevice):
             logger.warning("Already connected to serial device")
             return
 
+        # Save task reference to cancel it later if needed
         self._wait_for_device_task = asyncio.create_task(
             wait_for_device(
                 usb_id=self.usb_id,
@@ -149,35 +175,23 @@ class GrblDevice(GCodeDevice):
         )
         self._serial_port = await self._wait_for_device_task
 
-        # Create the response queue for this connection
-        self._response_queue = asyncio.Queue(maxsize=MAX_RESPONSE_QUEUE_SIZE)
-
-        # Reset disconnect event for this connection
-        self._disconnect_event = asyncio.Event()
-
-        # Create the serial connection using asyncio.Protocol
-        loop = asyncio.get_running_loop()
-
-        # Create protocol factory that passes the response queue and disconnect event
         def protocol_factory():
             return GCodeSerialProtocol(
                 response_queue=self._response_queue, disconnect_event=self._disconnect_event
             )
 
         _, self._protocol = await serial_asyncio.create_serial_connection(
-            loop,
+            asyncio.get_running_loop(),
             protocol_factory,
             self._serial_port,
             baudrate=self.baud_rate,
         )
 
-        # Flush any startup messages from the device
         await self._flush_input()
-
-        # Initialize device state and queues
-        await self._initialize_device()
+        await self._reset_running_state()
 
         self._connected = True
+        self._disconnect_event.clear()
         logger.info(f"Connected to {self._serial_port} at {self.baud_rate} baud")
 
         # Start four concurrent tasks:
@@ -189,48 +203,13 @@ class GrblDevice(GCodeDevice):
         self._response_loop_task = asyncio.create_task(self._response_loop())
         self._liveness_task = asyncio.create_task(self._liveness_task_loop())
 
-    async def _initialize_device(self) -> None:
-        """
-        Initialize device state and clear all queues.
-
-        Resets buffer quota, clears in-flight and task queues, resets state,
-        and clears the ok swallowing counter. Called during device connection
-        and when the device restarts (ALARM or Grbl response, or receiving 0x18 command).
-        """
-        logger.debug("Initializing device state and queues")
-
-        # Clear the task queue
-        self.clear_queue()
-
-        # Clear in-flight queue
-        self._in_flight_queue = []
-
-        # Clear response queue
-        try:
-            while not self._response_queue.empty():
-                self._response_queue.get_nowait()
-        except asyncio.QueueEmpty:
-            pass
-
-        # Reset buffer management state
-        self._buffer_quota = self.grbl_buffer_size
-        self._skippable_oks = 0
-
-        # Reset device state
-        self._device_state = GrblDeviceState()
-
-        # Set initial device state in trigger manager
-        trigger_manager = TriggerManager.get_instance()
-        trigger_manager.set_current_device_state(self._device_state.status)
-
-        # Reset resume event (allow processing to continue)
-        self._resume_event.set()
-
-        logger.debug("Device initialization complete")
-
     async def disconnect(self) -> None:
         """Disconnect from the serial device."""
+
+        logger.info("Disconnecting from serial device and cleaning up")
+
         self._running = False
+        self._connected = False
 
         # Cancel all task loops
         for task_ref in [
@@ -251,7 +230,7 @@ class GrblDevice(GCodeDevice):
         self._response_loop_task = None
         self._liveness_task = None
 
-        await self._force_state_transition(GrblDeviceStatus.DISCONNECTED)
+        await self._update_device_state(GrblDeviceStatus.DISCONNECTED)
 
         if self._protocol:
             try:
@@ -277,34 +256,23 @@ class GrblDevice(GCodeDevice):
 
         logger.verbose(f"Received task: {repr(task)}")
 
-        # Quick response gate: reject tasks if device is offline
-        if not self._connected and isinstance(task, GCodeTask):
-            logger.debug(f"Device offline, rejecting task: {repr(task)}")
-            if task.should_respond:
-                task.send_response("error: device offline")
-            return
-
-        if not self._running and isinstance(task, ShellTask):
-            response = ""
-            try:
-                logger.debug(f"Executing shell task while device offline: {task.id}")
-                success_val, error_msg = await task.execute()
-                response = "ok" if success_val else f"error: {error_msg}"
-            except Exception as e:
-                logger.error(f"Error executing shell task {task.id}: {e}")
-                response = f"error: {e}"
-            finally:
+        # Responding to tasks while device is offline
+        if not self._connected:
+            if isinstance(task, GCodeTask):
+                logger.verbose(f"Device offline, rejecting task: {repr(task)}")
                 if task.should_respond:
-                    task.send_response(response)
+                    task.send_response("error: device offline")
 
-                logger.verbose(f"Completed task: {repr(task)}")
+            elif isinstance(task, ShellTask):
+                await self._handle_shell_task(task)
 
         # Check if this is a real-time command and handle it immediately
-        if await self._handle_realtime_commands(task):
-            return
+        elif await self._handle_realtime_commands(task):
+            # Real-time command was handled, no further processing needed
+            pass
 
         # Check Alarm state flow control
-        if (
+        elif (
             self._device_state
             and self._device_state.status == GrblDeviceStatus.ALARM.value
             and not self._is_command_allowed_in_alarm(task)
@@ -313,13 +281,12 @@ class GrblDevice(GCodeDevice):
             # Send error response if task requires one
             if task.should_respond:
                 task.send_response("error:9")
-            return
 
-        # Queue non-real-time commands for processing
-        await self.task_queue.put(task)
-
-        # Kick off buffer filling if we were waiting for new tasks
-        await self._fill_device_buffer()
+        # Handle tasks normally by queuing them for processing
+        else:
+            await self.task_queue.put(task)
+            # Try to fill device buffer if we can
+            await self._fill_device_buffer()
 
     async def _flush_input(self) -> None:
         """Flush any pending input from the serial device."""
@@ -344,7 +311,7 @@ class GrblDevice(GCodeDevice):
 
         This method will block if the buffer is full and no responses are incoming.
         """
-        while self._running and self._buffer_quota > 0 and not self.buffer_paused:
+        while self._running and not self._buffer_paused:
             # Check if we're in Hold state - wait for resume event if so
             if not self._resume_event.is_set():
                 logger.debug("Device in Hold state, pausing task processing")
@@ -357,12 +324,13 @@ class GrblDevice(GCodeDevice):
                     break
 
                 # Check if this is a GCodeTask and if it fits in the buffer
-                if self.task_queue._queue[0].char_count > self._buffer_quota:  # pyright: ignore[reportAttributeAccessIssue]
+                elif self.task_queue._queue[0].char_count > self._buffer_quota: # pyright: ignore[reportAttributeAccessIssue]
                     logger.verbose(
                         f"Device buffer too full for next task, backing off "
                         f"({self._buffer_quota * 100.0 / self.grbl_buffer_size}%)"
                     )
                     break
+
                 # Get the next task from the queue
                 task = await self.task_queue.get()
 
@@ -380,18 +348,17 @@ class GrblDevice(GCodeDevice):
                         )
                         self._device_state.homing = HomingStatus.QUEUED
 
-                if isinstance(task, ShellTask) and task.wait_for_idle:
+                elif isinstance(task, ShellTask) and task.wait_for_idle:
                     logger.verbose(
                         f"Injecting dwell before executing shell task and pausing buffer fill: "
                         f"{task.id}"
                     )
-                    self.buffer_paused = True
+                    self._buffer_paused = True
                     dwell_task = GCodeTask(gcode="G4 P0\n", should_respond=False)
                     self._in_flight_queue.append(dwell_task)
                     await self._send(dwell_task)
 
                 self._in_flight_queue.append(task)
-
                 logger.verbose(f"Added task to in-flight queue: {repr(task)}")
 
                 # Mark as done in the queue
@@ -482,30 +449,24 @@ class GrblDevice(GCodeDevice):
         by polling for the device to come back online.
         """
         try:
-            while self._running:
-                # Wait for disconnect event
+            while True:
                 await self._disconnect_event.wait()
-
-                if not self._running:
-                    break
 
                 logger.info("Device disconnected, attempting to reconnect...")
 
-                # Clean up current connection
                 try:
                     await self.disconnect()
                 except Exception as e:
-                    # logger.error(f"Error during disconnect cleanup: {e}")
+                    logger.error(f"Error during disconnect cleanup: {e}")
                     raise e
 
-                # Attempt to reconnect
                 try:
                     await self.connect()
                     logger.info("Device reconnected successfully")
                 except Exception as e:
                     logger.error(f"Failed to reconnect to device: {e}")
                     # Wait a bit before attempting again
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(self.device_discovery_poll_interval)
 
         except asyncio.CancelledError:
             logger.debug("Reconnect handler stopped")
@@ -519,7 +480,7 @@ class GrblDevice(GCodeDevice):
         Args:
             line: A single cleaned response line from the device.
         """
-        logger.verbose(f"Processing response line: {line!r}")
+        logger.verbose(f"Processing response line: {repr(line)}")
 
         if line.startswith("ok"):
             await self._handle_ok_response(line)
@@ -531,14 +492,15 @@ class GrblDevice(GCodeDevice):
             logger.warning(f"Received device alarm: {line}")
             # Set device state preemptively to Alarm
             if self._device_state:
-                await self._force_state_transition(GrblDeviceStatus.ALARM)
+                await self._update_device_state(GrblDeviceStatus.ALARM)
                 logger.verbose(f"Device state updated preemptively to: {self._device_state.status}")
             await self._broadcast_data_to_clients(line)
-            await self._initialize_device()
+            await self._reset_running_state()
 
         elif line.startswith("<"):
-            await self._handle_state_update(line)
-            await self._respond_to_client(line)
+            await self._update_device_state_from_report(line)
+            if self._is_status_in_flight():
+                await self._respond_to_client(line)
 
         elif line.startswith("["):
             await self._broadcast_data_to_clients(line)
@@ -549,7 +511,8 @@ class GrblDevice(GCodeDevice):
         elif "Grbl " in line:
             logger.debug(f"Device initialization message: {line}")
             await self._broadcast_data_to_clients(line)
-            await self._initialize_device()
+            await self._reset_running_state()
+            await self._update_device_state(GrblDeviceStatus.IDLE)
 
         else:
             logger.debug(f"Unhandled device response: {line}")
@@ -564,10 +527,8 @@ class GrblDevice(GCodeDevice):
         Args:
             line: The 'ok' response line from the device.
         """
-        if self._should_swallow_ok():
-            return
-
-        await self._handle_task_completion(line, success=True)
+        if not self._swallow_ok():
+            await self._handle_task_completion(line, success=True)
 
     async def _handle_realtime_commands(self, task: Task) -> bool:
         """
@@ -598,7 +559,7 @@ class GrblDevice(GCodeDevice):
         # Handle soft reset (0x18 or Ctrl+X)
         if gcode == "\x18" or gcode == "0x18":
             logger.info("Real-time command: Soft reset (0x18)")
-            await self._initialize_device()
+            await self._reset_running_state()
 
         # Handle status query (?)
         elif gcode == "?":
@@ -616,7 +577,7 @@ class GrblDevice(GCodeDevice):
             logger.debug("Real-time command: Feed hold (!)")
             # Update device state preemptively to Hold
             if self._device_state:
-                await self._force_state_transition(GrblDeviceStatus.HOLD)
+                await self._update_device_state(GrblDeviceStatus.HOLD)
                 logger.verbose(f"Device state updated preemptively to: {self._device_state.status}")
             # Pause task processing by clearing the resume event
             self._resume_event.clear()
@@ -627,7 +588,7 @@ class GrblDevice(GCodeDevice):
 
             # Update device state preemptively to Run
             if self._device_state:
-                await self._force_state_transition(GrblDeviceStatus.RUN)
+                await self._update_device_state(GrblDeviceStatus.RUN)
                 logger.verbose(f"Device state updated preemptively to: {self._device_state.status}")
 
             # Resume task processing by setting the resume event
@@ -639,7 +600,7 @@ class GrblDevice(GCodeDevice):
         await self._send(GCodeTask(gcode=gcode))
         return True
 
-    async def _handle_state_update(self, line: str) -> None:
+    async def _update_device_state_from_report(self, line: str) -> None:
         """
         Handle a status report (device state update).
 
@@ -650,36 +611,13 @@ class GrblDevice(GCodeDevice):
             line: The status report line from the device.
         """
 
-        if not self._device_state:
-            self._device_state = GrblDeviceState()
+        new_status = GrblDeviceState.parse_status_str(line)
+        await self._handle_device_status_update(new_status)
 
-        old_status = self._device_state.status
-        self._device_state.update_status(line)
+    async def _update_device_state(self, status: GrblDeviceStatus) -> None:
+        await self._handle_device_status_update(status.value)
 
-        if self._device_state.status != old_status:
-            await self._handle_state_transitition(old_status)
-
-    async def _force_state_transition(self, new_status: GrblDeviceStatus) -> None:
-        """
-        Force a device state transition to a new status.
-
-        This method is used to manually set the device state and trigger
-        any associated actions for the state transition.
-
-        Args:
-            new_status: The new device status to set.
-        """
-
-        if not self._device_state:
-            self._device_state = GrblDeviceState()
-
-        old_status = self._device_state.status
-        self._device_state.status = new_status
-
-        if self._device_state.status != old_status:
-            await self._handle_state_transitition(old_status)
-
-    async def _handle_state_transitition(self, old_status: str) -> None:
+    async def _handle_device_status_update(self, status: str) -> None:
         """
         Handle actions needed on device state transitions
         Current status is already set in self._device_state.
@@ -688,19 +626,27 @@ class GrblDevice(GCodeDevice):
         """
 
         if not self._device_state:
+            self._device_state = GrblDeviceState()
+
+        old_status = self._device_state.status
+
+        # Same state, no change
+        if status == old_status:
             return
+
+        # Update stored status
+        self._device_state.status = status
 
         # Handle state changes
         logger.debug(f"Device changed state from {old_status} to {self._device_state.status}")
 
         # Update current device state in trigger manager and trigger state-based triggers
-        trigger_manager = TriggerManager.get_instance()
-        asyncio.create_task(trigger_manager.on_device_status(self._device_state.status))
+        await TriggerManager().on_device_status(self._device_state.status)
 
         # Redundancy check for ALARM state to reinitialize (in case we missed ALARM: message)
-        if self.device_state == GrblDeviceStatus.ALARM.value:
+        if self._device_state.status == GrblDeviceStatus.ALARM.value:
             logger.warning("Device state changed to Alarm, reinitializing device")
-            await self._initialize_device()
+            await self._reset_running_state()
 
         # We finished homing, but the homing "ok" hasn't arrived yet
         if (
@@ -750,7 +696,6 @@ class GrblDevice(GCodeDevice):
 
         # Credit back the buffer quota if it's a GCodeTask
         if isinstance(completed_task, GCodeTask):
-
             if not is_immediate_grbl_command(completed_task.gcode):
                 self._buffer_quota += completed_task.char_count
                 logger.verbose(
@@ -771,10 +716,7 @@ class GrblDevice(GCodeDevice):
         if completed_task.should_respond:
             completed_task.send_response(response_line)
 
-        # Drain any non-GCodeTasks following this task and execute them
         await self._drain_non_gcode_tasks()
-
-        # Try to fill buffer with more tasks
         await self._fill_device_buffer()
 
     async def _drain_non_gcode_tasks(self) -> None:
@@ -789,31 +731,52 @@ class GrblDevice(GCodeDevice):
             shell_task = self._in_flight_queue.pop(0)
 
             if isinstance(shell_task, ShellTask):
+                await self._handle_shell_task(shell_task)
+
                 if shell_task.wait_for_idle:
-                    # Resume buffer filling, this task caused it to pause
-                    self.buffer_paused = False
+                    # This task caused the buffer fill to pause, continue
+                    self._buffer_paused = False
 
-                logger.verbose(f"Executing shell task during drain: {shell_task.id}")
-                response = ""
-                try:
-                    success_val, error_msg = await shell_task.execute()
-                    response = "ok" if success_val else f"error: {error_msg}"
-                except Exception as e:
-                    logger.error(f"Error executing shell task {shell_task.id}: {e}")
-                    response = f"error: {e}"
-                finally:
-                    if shell_task.should_respond:
-                        shell_task.send_response(response)
+    async def _handle_shell_task(self, task: ShellTask) -> None:
+        """
+        Start execution of a shell task and wait if necessary, return immediately otherwise
+        """
 
-                    logger.verbose(f"Completed task: {repr(shell_task)}")
+        shell_task_complete = asyncio.create_task(self._execute_shell_task(task))
 
-    def _should_swallow_ok(self) -> bool:
+        if task.wait_for_idle:
+            await shell_task_complete
+
+    async def _execute_shell_task(self, task: ShellTask) -> None:
+        """
+        Execute a shell task, wait for completion and send response to client if needed
+        """
+
+        response = ""
+        try:
+            logger.debug(f"Executing shell task: {task.id}")
+            success_val, error_msg = await task.execute()
+            response = "ok" if success_val else f"error: {error_msg}"
+        except Exception as e:
+            logger.error(f"Error executing shell task {task.id}: {e}")
+            response = f"error: {e}"
+        finally:
+            if task.should_respond:
+                task.send_response(response)
+
+            logger.verbose(f"Completed task: {repr(task)}")
+
+    def _swallow_ok(self) -> bool:
         """
         Check if this 'ok' response should be swallowed.
 
         Returns:
             True if this is a status request 'ok' to be discarded, False otherwise.
         """
+
+        if self._skippable_oks < 0:
+            self._skippable_oks = 0
+
         if not self.swallow_realtime_ok or self._skippable_oks == 0:
             return False
 
@@ -835,6 +798,24 @@ class GrblDevice(GCodeDevice):
         """
 
         return bool(task and task.gcode.strip().upper() == "$H")
+
+    def _is_status_in_flight(self) -> bool:
+        """
+        Check if we're still waiting to finish a homing command
+        """
+
+        task = self._get_oldest_gcode_task()
+        return self._is_status(task)
+
+    def _is_status(self, task: GCodeTask | None) -> bool:
+        """
+        Check if the given task is a status command (?)
+
+        Args:
+            task: The task to check.
+        """
+        return bool(task and task.gcode.strip() == "?")
+
 
     def _is_command_allowed_in_alarm(self, task: Task) -> bool:
         """

@@ -265,7 +265,7 @@ class TriggerManager:
             task = self._pending_state_triggers[trigger_id]
             if not task.done():
                 logger.debug(
-                    "Cancelling pending state trigger '%s' due to state change",
+                    "Cancelling pending state trigger '%s'",
                     trigger_id
                 )
                 task.cancel()
@@ -376,6 +376,10 @@ class TriggerManager:
         """
         try:
             # Wait for the delay period if specified
+            logger.info(
+                "Trigger '%s' scheduled to run after %s seconds for state '%s'",
+                trigger.id, trigger.delay, state
+            )
             if trigger.delay > 0:
                 await asyncio.sleep(trigger.delay)
 
@@ -404,7 +408,6 @@ class TriggerManager:
                 )
         except asyncio.CancelledError:
             logger.debug("State trigger '%s' was cancelled", trigger.id)
-            raise
         except Exception as e:
             logger.error(
                 "Error executing state trigger '%s': %s",

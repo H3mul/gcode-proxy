@@ -139,14 +139,14 @@ custom-triggers:
     trigger:
       type: state
       match: Idle
-      delay: 300 #s (5 minutes)
+      delay: 30 #s (5 minutes)
     command: "hass-cli service call homeassistant.turn_off --arguments entity_id=switch.laser_power"
 
   # Example: Power on when requested
   - id: power-on
     trigger:
       type: gcode
-      match: .*
+      match: ^[^?]*$
       state: Disconnected
       behavior: forward # Don't eat the command
       synchronize: false
