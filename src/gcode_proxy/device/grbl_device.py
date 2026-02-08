@@ -347,6 +347,7 @@ class GrblDevice(GCodeDevice):
                             + f" to Idle from Home; task: {repr(task)}"
                         )
                         self._device_state.homing = HomingStatus.QUEUED
+                        await self._update_device_state(GrblDeviceStatus.HOME)
 
                 elif isinstance(task, ShellTask) and task.wait_for_idle:
                     logger.verbose(

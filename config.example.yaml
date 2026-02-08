@@ -139,7 +139,7 @@ custom-triggers:
     trigger:
       type: state
       match: Idle
-      delay: 30 #s (5 minutes)
+      delay: 300 #s (5 minutes)
     command: "hass-cli service call homeassistant.turn_off --arguments entity_id=switch.laser_power"
 
   # Example: Power on when requested
